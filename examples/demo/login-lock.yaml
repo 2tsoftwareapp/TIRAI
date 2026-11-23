@@ -1,7 +1,7 @@
 # Evidence scenario: each step = tab + actions + expect (+ annotations, subtitle).
 # Run `tirai run --dry-run` first to find failing steps, then `tirai record`.
 name: "Login validation + DB verification"
-lang: vi
+lang: en
 tabs:
   app:
     url: ${APP_URL}
@@ -21,20 +21,20 @@ databases:
 steps:
   - id: S1
     tab: app
-    title: Mở trang login
-    subtitle: "Bước 1: Mở trang đăng nhập của ứng dụng"
+    title: Open the login page
+    subtitle: "Step 1: Open the application login page"
     actions:
       - navigate: ${APP_URL}
     expect:
       - visible: "#email"
       - text_contains: { selector: h2, text: "Sign in" }
     annotate:
-      - box: { target: "form", label: "Form đăng nhập", color: "#1f6feb" }
+      - box: { target: "form", label: "Login form", color: "#1f6feb" }
 
   - id: S2
     tab: app
-    title: Email sai định dạng
-    subtitle: "Bước 2: Nhập email sai định dạng → hệ thống báo lỗi"
+    title: Invalid email format
+    subtitle: "Step 2: Enter a malformed email → validation error"
     actions:
       - fill: { selector: "#email", value: "alice-at-demo.local" }
       - fill: { selector: "#password", value: "${APP_PASSWORD}" }
@@ -43,13 +43,13 @@ steps:
       - text_contains: { selector: ".error", text: "Email format is invalid." }
     annotate:
       - box: { target: "#email" }
-      - arrow: { target: ".error", from: right, label: "Lỗi định dạng email" }
+      - arrow: { target: ".error", from: right, label: "Invalid email format" }
       - blur: { target: "#password" }
 
   - id: S3
     tab: app
-    title: Login tài khoản bị khoá
-    subtitle: "Bước 3: Login bob@demo.local (tài khoản bị khoá) → bị từ chối"
+    title: Locked account is rejected
+    subtitle: "Step 3: Log in as bob@demo.local (locked) → rejected"
     actions:
       - fill: { selector: "#email", value: "bob@demo.local" }
       - fill: { selector: "#password", value: "${APP_PASSWORD}" }
@@ -58,13 +58,13 @@ steps:
       - text_contains: { selector: ".error", text: "This account is locked" }
     annotate:
       - circle: { target: ".error" }
-      - arrow: { target: ".error", from: bottom, label: "Tài khoản bị khoá" }
+      - arrow: { target: ".error", from: bottom, label: "Account locked" }
       - blur: { target: "#password" }
 
   - id: S4
     tab: db
-    title: Kiểm tra DB trạng thái bob
-    subtitle: "Bước 4: Query DB (user read-only): bob có status = LOCKED, failed_logins = 5"
+    title: Database shows bob as LOCKED
+    subtitle: "Step 4: Query the DB (read-only user): bob has status = LOCKED, failed_logins = 5"
     actions:
       - sql: "SELECT id, email, status, failed_logins FROM users WHERE email = 'bob@demo.local';"
     expect:
@@ -73,15 +73,15 @@ steps:
           columns: [email, status, failed_logins]
           rows: [{ email: bob@demo.local, status: LOCKED, failed_logins: 5 }]
     annotate:
-      - box: { target: ".cm-content", color: "#1f6feb", label: "Câu query (user read-only)", labelPos: bottom }
+      - box: { target: ".cm-content", color: "#1f6feb", label: "Read-only query", labelPos: bottom }
       - highlight: { target: { grid: { column: status, row: 1 } } }
       - box: { target: { grid: { column: status, toColumn: failed_logins, row: 1 } }, padding: 2 }
       - arrow: { target: { grid: { column: status, toColumn: failed_logins, row: 1 } }, from: right, label: "status = LOCKED, failed_logins = 5" }
 
   - id: S5
     tab: app
-    title: Login thành công
-    subtitle: "Bước 5: Login alice@demo.local hợp lệ → vào Dashboard"
+    title: Valid login succeeds
+    subtitle: "Step 5: Log in as alice@demo.local → dashboard"
     actions:
       - fill: { selector: "#email", value: "alice@demo.local" }
       - fill: { selector: "#password", value: "${APP_PASSWORD}" }
@@ -90,12 +90,12 @@ steps:
       - url_contains: "/dashboard"
       - text_contains: { selector: "#welcome", text: "Welcome, Alice Nguyen" }
     annotate:
-      - box: { target: "#welcome", color: "#16a34a", label: "Đăng nhập thành công", labelPos: bottom }
+      - box: { target: "#welcome", color: "#16a34a", label: "Logged in", labelPos: bottom }
 
   - id: S6
     tab: db
-    title: Kiểm tra DB trạng thái alice
-    subtitle: "Bước 6: Query DB: alice có status = ACTIVE"
+    title: Database shows alice as ACTIVE
+    subtitle: "Step 6: Query the DB: alice has status = ACTIVE"
     actions:
       - sql: "SELECT id, email, status, failed_logins FROM users WHERE email = 'alice@demo.local';"
     expect:
