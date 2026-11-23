@@ -10,7 +10,7 @@ import yaml
 
 ACTIONS = {
     "navigate", "fill", "click", "press", "wait", "wait_for", "sql", "dbx_login",
-    "select", "hover", "scroll", "upload", "dialog", "save",
+    "select", "hover", "scroll", "upload", "dialog", "save", "eval",
 }  # fmt: skip
 EXPECTS = {
     "visible", "not_visible", "text_contains", "text_matches", "url_contains",

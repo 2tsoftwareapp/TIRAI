@@ -206,6 +206,12 @@ class Runner:
             self.pause(1.0)
         elif kind == "save":
             self.save(tab, arg)
+        elif kind == "eval":
+            # Page-side setup the vocabulary has no action for (cookies, localStorage, feature flags).
+            if self.b.evaluate(tid, interpolate(arg)) is False:
+                raise ScenarioError(f"eval returned false: {arg[:80]}")
+            self.apply_privacy(tab)
+            self.pause(0.5)
         elif kind == "dialog":
             # Pre-answer native dialogs for the rest of this page (bsk blocks on a real one).
             ok = "true" if arg == "accept" else "false"

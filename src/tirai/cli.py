@@ -213,6 +213,7 @@ def cmd_index(args):
 def cmd_verify(args):
     from tirai import report, sign
 
+    args.dir = args.out or args.dir
     problems = report.verify(args.dir)
     notes = []
     try:
@@ -303,6 +304,14 @@ def cmd_capture(args):
     return cmd_from_trace(args)
 
 
+def _port_busy(port):
+    import socket
+
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def cmd_dbx(args):
     import subprocess
     import time
@@ -316,6 +325,14 @@ def cmd_dbx(args):
         return 0
     binary = dbx_web_bin()
     docker = dbx_docker()
+    if _port_busy(args.port) and (binary or (docker and not docker[1])):
+        free = next((p for p in range(args.port + 1, args.port + 50) if not _port_busy(p)), None)
+        if free is None:
+            print(f"port {args.port} is used by another service (not DBX web); pass --port")
+            return 1
+        print(f"port {args.port} is used by another service (not DBX web); using {free}")
+        print(f"  point scenarios at it: DBX_URL=http://127.0.0.1:{free}/")
+        args.port, url = free, f"http://127.0.0.1:{free}/"
     if binary:
         root = dbx_package_root(binary)
         env = {**os.environ, "DBX_PORT": str(args.port), "DBX_PACKAGE_ROOT": str(root)}
@@ -533,6 +550,7 @@ def build_parser():
 
     s = sub.add_parser("verify", help="check an evidence folder against its manifest.sha256 (and signature)")
     s.add_argument("dir", nargs="?", default="evidence/record")
+    s.add_argument("--out", help="same as DIR (the --out folder used with run/record)")
     s.add_argument("--pubkey", help="trusted SSH public key the manifest must be signed with")
     s.add_argument("--allowed-signers", help="ssh allowed_signers file (with --identity)")
     s.add_argument("--identity", default="tirai", help="signer identity in the allowed_signers file")

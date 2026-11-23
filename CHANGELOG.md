@@ -4,6 +4,20 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `eval:` action: run JS in the page (e.g. seed cookies/localStorage before a flow); fails on an exception or `false`.
+- `tirai verify --out <dir>` (same as the positional folder, matching `run`/`record --out`).
+
+### Fixed
+
+- `tirai dbx -d` no longer fails with AddrInUse when another (non-DBX) service holds port 4224: it picks the next
+  free port and prints the `DBX_URL` to use.
+- `tirai setup` skips sudo package installs when sudo would prompt without a terminal (agent shells) and prints the
+  command instead.
+
 ## [2.2.0] - 2026-11-23
 
 ### Added

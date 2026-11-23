@@ -48,6 +48,7 @@ steps: [...]
 | `hover` | `hover: "#menu"` |
 | `scroll` | `scroll: "#footer"` (scrolls the element into view) |
 | `upload` | `upload: { selector: "input[type=file]", file: fixtures/invoice.pdf }` (path relative to the scenario; a list for several files) |
+| `eval` | `eval: "localStorage.setItem('token', '${TOKEN}')"` — run JS in the page (seed cookies/localStorage, flags); fails if it throws or returns `false`; prefer real actions for anything the video should show |
 | `dialog` | `dialog: accept` or `dialog: dismiss` — put it before the action that opens `alert`/`confirm`/`prompt`; lasts until the page navigates |
 
 ## Expectations
