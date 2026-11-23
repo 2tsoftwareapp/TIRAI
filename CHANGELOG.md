@@ -1,10 +1,10 @@
 # TIRAI Changelog
 
-All notable changes to the TIRAI specification-to-test engine and CLI.
+All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + agent skill).
 
 ---
 
-## [Unreleased]
+## [2.2.0] - 2026-11-23
 
 ### Added
 
@@ -18,28 +18,7 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 - `tirai sign` (SSH signature over `manifest.sha256`, optional RFC 3161 timestamp); `tirai verify --pubkey`.
 - `tirai index`: one filterable HTML page across evidence runs.
 - `tirai from-spec`: draft scenarios from Gherkin, Markdown or CSV test cases, with live selector resolution.
-
-### Fixed
-
-- `tirai setup` reuses tools already on the machine instead of asking to install them again: a DBX web already
-  running (`DBX_URL` / port 4224), `dbx-web` on PATH or an existing `t8y2/dbx` Docker container/image; agent-browser's
-  Chrome when `agent-browser doctor` says it is installed and launches (no more `install --with-deps` / sudo on every
-  run); the browser-skill agent skill when bsk reports it installed; the BrowserSkill extension when `bsk doctor`
-  shows it connected. bsk is no longer offered when agent-browser is present (`tirai setup --only browserskill`).
-- agent-browser now records with the ffmpeg TIRAI selected (e.g. setup's copy in `~/.tirai/bin`) instead of an old
-  system ffmpeg on PATH, which failed with `ffmpeg write failed: Broken pipe`.
-- Any ffmpeg >= 6.0 anywhere on PATH (or Homebrew/Linuxbrew/snap dirs) is used before downloading one.
-- `tirai dbx` reuses a DBX web that is already running or an existing DBX Docker container.
-- Re-running `install.sh` / `install.ps1` keeps an installed `tirai` of the same version (`TIRAI_FORCE=1` reinstalls).
-
-### Added
-
 - `tirai setup --only <steps>`.
-
-## [2.2.0]
-
-### Added
-
 - Pinned, checksum-verified downloads in `tirai setup`: agent-browser 0.43.0 and DBX web 0.6.72 are checked against
   built-in SHA-256 digests; the static ffmpeg 8.1 archive against its release's `checksums.sha256`.
   `TIRAI_AGENT_BROWSER_VERSION` / `TIRAI_DBX_VERSION` pick another release (digest then read from GitHub);
@@ -52,7 +31,6 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
   tab needs no manual DBX setup.
 - MCP: `driver` / `headed` on `dry_run` and `record`; new `capture` and `dbx_connect` tools.
 - Runner unit tests with a fake driver (segments per tab block, failures, saved values, privacy, DBX provisioning).
-
 - agent-browser driver (vercel-labs, Apache-2.0) behind a driver interface, now the default; BrowserSkill stays
   available via `driver: bsk`, `--driver bsk` or `TIRAI_DRIVER`. `--headed`, animated cursor in recordings.
 - `tirai setup` checks ffmpeg's version (>= 6.0; 4.4 breaks agent-browser recording) and installs a static build
@@ -66,7 +44,6 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 - `privacy:` automatic PII masking (email/phone/card/token rules, patterns, selectors, keep list).
 - `tirai capture` / `tirai from-trace`: turn a `bsk record` trace into a scenario with resolved CSS selectors.
 - `tirai mcp`: stdio MCP server exposing the CLI as tools.
-
 - Installers pick a method automatically: prebuilt `tirai-<os>-<arch>` binary from GitHub Releases
   (SHA-256 checked, no Python needed), otherwise build from source. `--binary` / `--source` /
   `TIRAI_INSTALL_MODE`, `TIRAI_VERSION`, `TIRAI_BINARY`.
@@ -85,6 +62,23 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 
 ### Fixed
 
+- Final UAT fixes: `tirai index` verifies `manifest.sha256.sig` (a regenerated manifest with a stale signature shows
+  `modified (bad signature)`); `expect: db` without `columns:` uses the keys of the first expected row; the `phone`
+  PII rule no longer matches dates/timestamps; MCP exposes `sign`, `export`, `scan_pii`, `index`, `from_spec`;
+  `tirai doctor` lists tesseract, voice, agent-desktop and ssh-keygen.
+- Audit fixes: agent-browser sessions are closed when a run aborts; tab/`dbx.connect` errors are reported without a
+  traceback; an unreachable tab URL fails the run; `sql:` steps fail when DBX shows a query error; the title card
+  names the driver used.
+- `tirai setup` reuses tools already on the machine instead of asking to install them again: a DBX web already
+  running (`DBX_URL` / port 4224), `dbx-web` on PATH or an existing `t8y2/dbx` Docker container/image; agent-browser's
+  Chrome when `agent-browser doctor` says it is installed and launches (no more `install --with-deps` / sudo on every
+  run); the browser-skill agent skill when bsk reports it installed; the BrowserSkill extension when `bsk doctor`
+  shows it connected. bsk is no longer offered when agent-browser is present (`tirai setup --only browserskill`).
+- agent-browser now records with the ffmpeg TIRAI selected (e.g. setup's copy in `~/.tirai/bin`) instead of an old
+  system ffmpeg on PATH, which failed with `ffmpeg write failed: Broken pipe`.
+- Any ffmpeg >= 6.0 anywhere on PATH (or Homebrew/Linuxbrew/snap dirs) is used before downloading one.
+- `tirai dbx` reuses a DBX web that is already running or an existing DBX Docker container.
+- Re-running `install.sh` / `install.ps1` keeps an installed `tirai` of the same version (`TIRAI_FORCE=1` reinstalls).
 - `tirai annotate-js` returns a stable path when running from the one-file binary.
 
 ---
