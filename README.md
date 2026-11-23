@@ -227,7 +227,8 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 | `tirai record <file>` | Dry-run, record and compose in one go (`--record-failures`: keep going and record bug evidence) |
 | `tirai verify [dir]` | Check an evidence folder against its `manifest.sha256` |
 | `tirai compose <timeline.json>` | Rebuild the video and report from a recorded timeline |
-| `tirai capture <url>` | Click a flow once in the browser; get a scenario (`from-trace` converts an existing trace) |
+| `tirai capture <url>` | Click a flow once in the browser; get a scenario (`from-trace` converts a bsk trace) |
+| `tirai dbx-connect` | Create/update the DBX connection from a DSN (`--dsn-env EV_DB_DSN --name shop`) |
 | `tirai mcp` | Run the MCP server (validate, dry_run, record, compose, verify, from_trace) |
 | `tirai install-skill` | Install the skill for an agent or into any directory |
 

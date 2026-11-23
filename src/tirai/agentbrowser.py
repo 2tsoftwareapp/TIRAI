@@ -50,11 +50,19 @@ class AgentBrowser:
         env = os.environ
         self.headed = headed if headed is not None else env.get("TIRAI_HEADED", "") not in ("", "0", "false")
         self.cursor = cursor if cursor is not None else env.get("TIRAI_CURSOR", "1") not in ("0", "false")
+        self.init_scripts = []  # JS sources registered before any page script when the session launches
+        self._init_dir = None
 
     def run(self, *args, timeout=90, stdin=None, launch=False):
         cmd = [_bin(), "--session", self.session, "--json"]
         if launch and self.headed:
             cmd.append("--headed")
+        if launch and self.init_scripts:
+            self._init_dir = self._init_dir or tempfile.mkdtemp(prefix="tirai-init-")
+            for i, src in enumerate(self.init_scripts):
+                f = Path(self._init_dir) / f"init-{i}.js"
+                f.write_text(src, encoding="utf-8")
+                cmd += ["--init-script", str(f)]
         p = run_text([*cmd, *args], timeout=timeout, input=stdin)
         out = p.stdout.strip()
         try:
@@ -78,6 +86,9 @@ class AgentBrowser:
     def close_session(self):
         if self.session:
             run_text([_bin(), "--session", self.session, "close"], timeout=60)
+        if self._init_dir:
+            shutil.rmtree(self._init_dir, ignore_errors=True)
+            self._init_dir = None
 
     def use(self, tab):
         if tab is not None and tab != self.active:

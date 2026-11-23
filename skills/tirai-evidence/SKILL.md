@@ -16,7 +16,7 @@ tirai dbx -d            # start DBX web (http://127.0.0.1:4224) when the scenari
 ```
 
 All required checks must be `ok`. Works on macOS, Linux and Windows; follow
-[references/setup.md](references/setup.md). The default driver needs no extension; only `driver: bsk` / `tirai capture` need the user to install the BrowserSkill extension;
+[references/setup.md](references/setup.md). The default driver needs no extension; only `driver: bsk` needs the user to install the BrowserSkill extension;
 never use `sudo` without asking.
 
 ## 1. Write the scenario with the user
@@ -41,7 +41,9 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
 - Find selectors with `agent-browser open <url>` + `agent-browser snapshot` (or `bsk snapshot`) before writing them; do not guess. Or let the user click
-  the flow once: `tirai capture <url> -o <file>` writes the scenario from a `bsk record` trace.
+  the flow once: `tirai capture <url> -o <file>` opens a browser; the user clicks the flow and closes the window.
+- Database tab: `dbx.connect: {name: ..., host: ...}` on the DBX tab creates the connection from `databases.default`
+  (or run `tirai dbx-connect --dsn-env EV_DB_DSN --name <name>`); no manual DBX setup.
 - Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `save:` to reuse on-screen values as `{{name}}`.
 - Video: `zoom: <selector>` on a step, `layout: split` to show UI and DB side by side; `subtitle: {en, vi}` + `--lang`.
 - Real data on screen: add `privacy: { mask: [email, phone, card, token] }` (and `keep:` for the record under test).

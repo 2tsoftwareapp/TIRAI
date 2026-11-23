@@ -26,7 +26,8 @@ def test_download_assets(monkeypatch, plat, ff, agent):
     monkeypatch.setattr(bootstrap, "platform_arch", lambda: plat)
     url = bootstrap.ffmpeg_asset()
     assert (url is None) if ff is None else url.endswith(ff)
-    assert bootstrap.agent_browser_asset().endswith(agent)
+    url, sha = bootstrap.agent_browser_asset()
+    assert url.endswith("/v0.43.0/" + agent) and len(sha) == 64
 
 
 @pytest.mark.parametrize(
@@ -48,3 +49,34 @@ def test_scenario_driver_key():
     base = {"name": "x", "tabs": {"app": {"url": "http://a"}}, "steps": []}
     assert not any("driver" in e for e in validate({**base, "driver": "bsk"}))
     assert any("driver" in e for e in validate({**base, "driver": "selenium"}))
+
+
+def test_pinned_dbx_hashes_match_names():
+    for name in bootstrap.DBX_SHA256:
+        assert bootstrap.DBX_VERSION in name
+
+
+def test_fetch_verified(monkeypatch, tmp_path):
+    def fake_download(url, dest):
+        dest.write_bytes(b"abc")
+        return dest
+
+    monkeypatch.setattr(bootstrap, "download", fake_download)
+    good = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    assert bootstrap.fetch_verified("u", tmp_path / "a", good).read_bytes() == b"abc"
+    with pytest.raises(bootstrap.VerifyError, match="mismatch"):
+        bootstrap.fetch_verified("u", tmp_path / "b", "0" * 64)
+    assert not (tmp_path / "b").exists()
+    monkeypatch.delenv("TIRAI_ALLOW_UNVERIFIED", raising=False)
+    with pytest.raises(bootstrap.VerifyError, match="no SHA-256"):
+        bootstrap.fetch_verified("u", tmp_path / "c", None)
+    monkeypatch.setenv("TIRAI_ALLOW_UNVERIFIED", "1")
+    assert bootstrap.fetch_verified("u", tmp_path / "c", None).exists()
+
+
+def test_agent_browser_version_override_uses_release_digest(monkeypatch):
+    monkeypatch.setattr(bootstrap, "platform_arch", lambda: ("linux", "x64"))
+    monkeypatch.setenv("TIRAI_AGENT_BROWSER_VERSION", "9.9.9")
+    monkeypatch.setattr(bootstrap, "release_digest", lambda repo, tag, name: f"{tag}:{name}")
+    url, sha = bootstrap.agent_browser_asset()
+    assert "/v9.9.9/agent-browser-linux-x64" in url and sha() == "v9.9.9:agent-browser-linux-x64"

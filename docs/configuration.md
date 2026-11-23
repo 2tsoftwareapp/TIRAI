@@ -10,6 +10,9 @@ Nothing is tied to one OS or install location. Every external tool, font and tim
 | `TIRAI_DRIVER` | `agent-browser` if installed, else `bsk` | browser driver (scenario `driver:` and `--driver` win) |
 | `TIRAI_HEADED` | off | show the agent-browser window (same as `--headed`) |
 | `TIRAI_CURSOR` | `1` | draw agent-browser's animated cursor in recordings |
+| `TIRAI_AGENT_BROWSER_VERSION` | `0.43.0` | agent-browser release `tirai setup` downloads (pinned digest only for the default) |
+| `TIRAI_DBX_VERSION` | `0.6.72` | DBX web release `tirai setup` downloads |
+| `TIRAI_ALLOW_UNVERIFIED` | unset | `1` accepts a setup download whose SHA-256 is unknown |
 | `AGENT_BROWSER_BIN` | `~/.tirai/bin`, PATH, `~/.local/bin` | agent-browser CLI |
 | `DBX_WEB_BIN`, `DBX_WEB_DIR` | `~/.tirai/dbx` | DBX web server binary / package folder |
 | `DBX_PORT`, `DBX_DATA_DIR`, `DBX_PASSWORD` | `4224`, `~/.tirai/dbx-data`, none | passed to DBX web by `tirai dbx` |
@@ -52,7 +55,15 @@ tabs:
       editor: ".cm-content"            # SQL editor element
       password: "input[type=password]" # DBX login field
       run_key: "Ctrl+Enter"            # default: Meta+Enter on macOS, Ctrl+Enter elsewhere
+      connect:                         # optional: create/update the DBX connection before the tab opens
+        name: shop-readonly            # connection name in DBX
+        database: default              # key in `databases:` whose DSN is used (default: default)
+        host: evpg                     # DB host as DBX sees it (e.g. Docker service); default: the DSN host
+        password_env: DBX_PASSWORD     # env var with the DBX web password (default: DBX_PASSWORD)
 ```
+
+`tirai dbx-connect --dsn-env EV_DB_DSN --name shop-readonly [--db-host evpg] [--url ...]` does the same from the
+command line. DBX is asked to test the connection first; use a read-only database user.
 
 ## Skill locations
 

@@ -36,7 +36,9 @@ accepts an optional `cwd`; results are the CLI output, with `isError` set when t
 tirai capture http://127.0.0.1:8080/ --purpose "Locked account is rejected" -o scenarios/locked.yaml
 ```
 
-BrowserSkill opens its Agent Window and records what you click (`bsk record`); press finish in the browser.
+A browser window opens (agent-browser); click through the flow, then close the window. Selectors come from the
+page (id, data-testid, name, aria-label, else a short path); passwords become `${ENV}` placeholders.
+`--driver bsk` uses BrowserSkill's Agent Window (`bsk record`) instead.
 TIRAI replays the trace to resolve every target to a CSS selector, splits it into steps at each click/navigation
 and derives an expectation from what changed (new URL or new text). Redacted values such as passwords become
 `${PASSWORD}`-style placeholders. Review titles and expectations, add `annotate:`, then dry-run.

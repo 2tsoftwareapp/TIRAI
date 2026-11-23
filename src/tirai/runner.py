@@ -9,6 +9,7 @@ import os
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from tirai import db as dbq
 from tirai.agentbrowser import make_driver
@@ -27,6 +28,11 @@ DBX_DEFAULTS = {
 
 def js(v):
     return json.dumps(v, ensure_ascii=False)
+
+
+def _origin(url):
+    u = urlsplit(url)
+    return f"{u.scheme}://{u.netloc}"
 
 
 class Runner:
@@ -60,8 +66,24 @@ class Runner:
         return cfg
 
     # ---------- tabs / setup ----------
+    def provision_dbx(self, cfg):
+        """`dbx.connect`: create/update the DBX connection from the scenario's database DSN before the tab opens."""
+        conn = (cfg.get("dbx") or {}).get("connect")
+        if not conn:
+            return
+        from tirai.dbxconn import DbxError, connect
+
+        url = interpolate(cfg["url"])
+        dsn = interpolate(self.sc["databases"][conn.get("database", "default")]["dsn"])
+        password = os.environ.get(conn.get("password_env", "DBX_PASSWORD"))
+        try:
+            connect(_origin(url) + "/", dsn, interpolate(conn["name"]), password, conn.get("host"))
+        except DbxError as e:
+            raise RuntimeError(f"dbx.connect {conn['name']}: {e}") from None
+
     def open_tabs(self):
         for i, (name, cfg) in enumerate(self.sc["tabs"].items()):
+            self.provision_dbx(cfg)
             if i == 0 and not self.b.session:
                 self.tabs[name] = self.b.open_session(interpolate(cfg["url"]), self.scope)
             else:
@@ -320,13 +342,34 @@ class Runner:
         }
 
     # ---------- annotations ----------
-    def apply_privacy(self, tab):
-        """(Re)install auto PII masking in the tab; it keeps masking as the DOM changes until the next load."""
+    def privacy_config(self):
         privacy = self.sc.get("privacy")
-        if not privacy or self.sc["tabs"][tab].get("privacy") is False:
-            return
+        if not privacy:
+            return None
         cfg = {**privacy, "patterns": [interpolate(p) for p in privacy.get("patterns") or []]}
         cfg["keep"] = [interpolate(str(k)) for k in privacy.get("keep") or []]
+        return cfg
+
+    def privacy_init_script(self):
+        """Page init script that masks PII before the page paints (drivers with init-script support)."""
+        cfg = self.privacy_config()
+        if not cfg:
+            return None
+        origins = sorted(
+            {_origin(interpolate(t["url"])) for t in self.sc["tabs"].values() if t.get("privacy") is not False}
+        )
+        return (
+            annotate_js() + f";(()=>{{if(!{js(origins)}.includes(location.origin))return;"
+            f"const go=()=>{{try{{__ann.mask({js(cfg)})}}catch(e){{}}}};"
+            "if(document.documentElement)go();"
+            "document.addEventListener('DOMContentLoaded',go,{once:true})})()"
+        )
+
+    def apply_privacy(self, tab):
+        """(Re)install auto PII masking in the tab; it keeps masking as the DOM changes until the next load."""
+        cfg = self.privacy_config()
+        if not cfg or self.sc["tabs"][tab].get("privacy") is False:
+            return
         self.b.evaluate(self.tabs[tab], annotate_js() + f";__ann.mask({js(cfg)})")
 
     def annotate(self, tab, items):
@@ -347,6 +390,8 @@ class Runner:
     # ---------- main loop ----------
     def run(self):
         self.own_session = not self.b.session
+        if self.own_session and hasattr(self.b, "init_scripts") and (init := self.privacy_init_script()):
+            self.b.init_scripts.append(init)
         self.open_tabs()
         results = []
         for step in self.sc["steps"]:

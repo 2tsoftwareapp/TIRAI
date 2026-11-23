@@ -33,7 +33,8 @@ ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
 SETTINGS = {"hold", "timing_scale", "expect_timeout"}
 PII_RULES = {"email", "phone", "card", "token"}
 PRIVACY_KEYS = {"mask", "patterns", "selectors", "keep", "inputs"}
-DBX_KEYS = {"new_query", "editor", "password", "run_key"}
+DBX_KEYS = {"new_query", "editor", "password", "run_key", "connect"}
+DBX_CONNECT_KEYS = {"name", "database", "host", "password_env"}
 ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
@@ -252,6 +253,17 @@ def validate(sc) -> list[str]:
         for key in cfg.get("dbx") or {}:
             if key not in DBX_KEYS:
                 errors.append(f"tabs.{name}.dbx.{key}: unknown (allowed: {', '.join(sorted(DBX_KEYS))})")
+        conn = (cfg.get("dbx") or {}).get("connect")
+        if conn is not None:
+            if not isinstance(conn, dict) or not conn.get("name"):
+                errors.append(f"tabs.{name}.dbx.connect: needs at least `name`")
+            else:
+                for key in conn:
+                    if key not in DBX_CONNECT_KEYS:
+                        errors.append(f"tabs.{name}.dbx.connect.{key}: unknown")
+                db = conn.get("database", "default")
+                if db not in (sc.get("databases") or {}):
+                    errors.append(f"tabs.{name}.dbx.connect.database: {db!r} not in databases")
         for i, a in enumerate(cfg.get("setup", []) or []):
             kind = _single_key(a, f"tabs.{name}.setup[{i}]", ACTIONS, errors)
             if kind:

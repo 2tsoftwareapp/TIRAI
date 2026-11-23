@@ -142,6 +142,6 @@ privacy:
 ```
 
 Matches are covered with an opaque box in the page (so screenshots and video both hide them) and stay covered
-while the DOM changes. Masking is re-applied after every navigation, click and action. Set `privacy: false` on a
+while the DOM changes. With agent-browser the mask is registered as a page init script, so it is active before the page's own scripts on every load; it is also re-applied after every navigation, click and action. Set `privacy: false` on a
 tab to skip it. Limitations: text drawn on a canvas (e.g. DBX result cells) is not scanned — cover those with an
 `annotate: blur` grid target — and values in step titles, subtitles or `save`d variables are not rewritten.

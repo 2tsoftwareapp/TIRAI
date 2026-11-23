@@ -1,5 +1,6 @@
 """`tirai setup`: install ffmpeg, BrowserSkill and the agent skills on Linux, macOS or Windows."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -27,13 +28,63 @@ from tirai.system import (
 )
 
 BSK_INSTALLER = "https://raw.githubusercontent.com/Tencent/BrowserSkill/main/install.{ext}"
-AGENT_BROWSER_URL = (
-    "https://github.com/vercel-labs/agent-browser/releases/latest/download/agent-browser-{os}-{arch}{ext}"
-)
-# Static ffmpeg builds (GPL, libx264 + libvpx) for platforms whose package manager may ship an old ffmpeg.
-FFMPEG_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-{plat}-gpl-8.1.{ext}"
-DBX_RELEASES = "https://github.com/t8y2/dbx/releases"
+# Downloads are pinned to versions verified with TIRAI and checked against SHA-256 digests.
+# Override a version with TIRAI_AGENT_BROWSER_VERSION / TIRAI_DBX_VERSION (digest then comes from the release).
+AGENT_BROWSER_REPO = "vercel-labs/agent-browser"
+AGENT_BROWSER_VERSION = "0.43.0"
+AGENT_BROWSER_SHA256 = {
+    "agent-browser-darwin-arm64": "05338a8eeddf0b3f9ebf0c87a6c21aedc10685608c68618e1a8483c43eae9c3f",
+    "agent-browser-darwin-x64": "49a5ab27297213c1bc0005701a6a4542399abfc9d2cb7520ab519ebb94b8b13d",
+    "agent-browser-linux-arm64": "34be55c2b92d8d199fb9d1d62a905ee5b6ac5b1f3e8c24e5b20597f370d905e5",
+    "agent-browser-linux-x64": "8e69c9fb662514c9cf36e4911e94e913742ba066e55102486350e049dd847612",
+    "agent-browser-win32-x64.exe": "ebcef5ebea93c7ccf0fe3f8c18eee908ae9174dfef8e52a3dda6f24a59f630dc",
+}
+DBX_REPO = "t8y2/dbx"
+DBX_VERSION = "0.6.72"
+DBX_SHA256 = {
+    "DBX_0.6.72_x64-browser-static.tar.gz": "6d55cafe0cc306513733465ea1b387bf0d8ee7796bfe5c678ced3593210460d9",
+    "DBX_0.6.72_arm64-browser-static.tar.gz": "afe4546c64de1a908106e3995ebfdcfe8e73dd4b3c1d33052bfdb9d900fb5850",
+    "dbx-web_0.6.72_x86_64-browser-static.zip": "fb931d1fcbf34d7322601c67adb2a27b2a7ae3385b6b2bd96519dc639b611c4e",
+}
+# Static ffmpeg 8.1 (GPL: libx264, libvpx, freetype, libass) for platforms whose package manager may ship an old one.
+# BtbN rebuilds "latest" daily, so the archive is checked against that release's checksums.sha256.
+FFMPEG_RELEASE = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
+FFMPEG_ASSET = "ffmpeg-n8.1-latest-{plat}-gpl-8.1.{ext}"
 DBX_IMAGE = "t8y2/dbx:latest"
+
+
+class VerifyError(Exception):
+    pass
+
+
+def release_url(repo, tag, name):
+    return f"https://github.com/{repo}/releases/download/{tag}/{name}"
+
+
+def release_digest(repo, tag, name):
+    """SHA-256 GitHub records for a release asset (API), or None."""
+    url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
+    headers = {"User-Agent": "tirai-setup", "Accept": "application/vnd.github+json"}
+    if os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:  # noqa: S310
+            assets = json.load(r).get("assets", [])
+    except OSError:
+        return None
+    digest = next((a.get("digest") or "" for a in assets if a.get("name") == name), "")
+    return digest.split(":", 1)[1] if digest.startswith("sha256:") else None
+
+
+def fetch_verified(url, dest, expected):
+    """Download `url` to `dest` and check its SHA-256; TIRAI_ALLOW_UNVERIFIED=1 skips a missing digest."""
+    if not expected and os.environ.get("TIRAI_ALLOW_UNVERIFIED") != "1":
+        raise VerifyError(f"no SHA-256 known for {url} (set TIRAI_ALLOW_UNVERIFIED=1 to accept)")
+    download(url, dest)
+    if expected and sha256(dest) != expected.lower():
+        dest.unlink()
+        raise VerifyError(f"SHA-256 mismatch for {url}; download discarded")
+    return dest
 
 
 def download(url, dest):
@@ -60,15 +111,20 @@ def ffmpeg_asset():
     if osname == "macos":
         return None
     plat = {"linux": "linux", "windows": "win"}[osname] + ("arm64" if arch == "arm64" else "64")
-    return FFMPEG_URL.format(plat=plat, ext="zip" if osname == "windows" else "tar.xz")
+    return f"{FFMPEG_RELEASE}/" + FFMPEG_ASSET.format(plat=plat, ext="zip" if osname == "windows" else "tar.xz")
 
 
 def agent_browser_asset():
+    """(url, expected sha256 or None) for this OS/arch, or None when there is no prebuilt binary."""
     osname, arch = platform_arch()
     if osname == "windows" and arch == "arm64":
         return None
     os_id = {"linux": "linux", "macos": "darwin", "windows": "win32"}[osname]
-    return AGENT_BROWSER_URL.format(os=os_id, arch=arch, ext=".exe" if osname == "windows" else "")
+    name = f"agent-browser-{os_id}-{arch}" + (".exe" if osname == "windows" else "")
+    version = os.environ.get("TIRAI_AGENT_BROWSER_VERSION") or AGENT_BROWSER_VERSION
+    tag = f"v{version}"
+    sha = AGENT_BROWSER_SHA256.get(name) if version == AGENT_BROWSER_VERSION else None
+    return release_url(AGENT_BROWSER_REPO, tag, name), sha or (lambda: release_digest(AGENT_BROWSER_REPO, tag, name))
 
 
 def dbx_asset(version):
@@ -79,13 +135,6 @@ def dbx_asset(version):
     if osname == "windows" and arch == "x64":
         return f"dbx-web_{version}_x86_64-browser-static.zip"
     return None
-
-
-def latest_tag(releases_url):
-    """Latest release tag via the /releases/latest redirect (no GitHub API rate limit)."""
-    req = urllib.request.Request(f"{releases_url}/latest", method="HEAD", headers={"User-Agent": "tirai-setup"})
-    with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310 - fixed https URL
-        return r.geturl().rstrip("/").rsplit("/", 1)[-1]
 
 
 # Agents detected by their config directory (Devin skills are per repository: use --project).
@@ -210,7 +259,14 @@ class Setup:
         import zipfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            archive = download(url, Path(tmp) / url.rsplit("/", 1)[-1])
+            sums = download(f"{FFMPEG_RELEASE}/checksums.sha256", Path(tmp) / "checksums.sha256").read_text()
+            name = url.rsplit("/", 1)[-1]
+            want = next((ln.split()[0] for ln in sums.splitlines() if ln.strip().endswith(name)), None)
+            try:
+                archive = fetch_verified(url, Path(tmp) / name, want)
+            except VerifyError as e:
+                self.problems.append(f"ffmpeg: {e}")
+                return
             names = {"ffmpeg", "ffprobe", "ffmpeg.exe", "ffprobe.exe"}
             TIRAI_BIN.mkdir(parents=True, exist_ok=True)
             if archive.suffix == ".zip":
@@ -237,17 +293,26 @@ class Setup:
         print("- agent-browser (default browser driver)")
         found = agent_browser_bin()
         if not found:
-            url = agent_browser_asset()
-            if not url:
+            asset = agent_browser_asset()
+            if not asset:
                 self.problems.append("agent-browser: no prebuilt binary for this platform; use `driver: bsk`")
                 return
             if not self.confirm(f"download agent-browser into {TIRAI_BIN}"):
                 self.problems.append("agent-browser: not installed")
                 return
+            url, sha = asset
             print(f"  (from {url})")
             if self.dry_run:
                 return
-            found = download(url, TIRAI_BIN / ("agent-browser.exe" if IS_WINDOWS else "agent-browser"))
+            with tempfile.TemporaryDirectory() as tmp:
+                try:
+                    got = fetch_verified(url, Path(tmp) / "agent-browser", sha() if callable(sha) else sha)
+                except VerifyError as e:
+                    self.problems.append(f"agent-browser: {e}")
+                    return
+                found = TIRAI_BIN / ("agent-browser.exe" if IS_WINDOWS else "agent-browser")
+                TIRAI_BIN.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(got), found)
             found.chmod(0o755)
         print(f"  ok ({found})")
         # Chrome for Testing; on Linux --with-deps also installs the browser's system libraries.
@@ -260,12 +325,8 @@ class Setup:
         if dbx_web_bin():
             print(f"  ok ({dbx_web_bin()})")
             return
-        try:
-            tag = latest_tag(DBX_RELEASES)
-            name = dbx_asset(tag.lstrip("v"))
-        except OSError as e:
-            name = None
-            print(f"  could not read DBX releases: {e}")
+        version = os.environ.get("TIRAI_DBX_VERSION") or DBX_VERSION
+        name = dbx_asset(version)
         if not name:
             docker = find_bin("docker")
             if docker:
@@ -279,7 +340,7 @@ class Setup:
         if not self.confirm(f"download DBX web ({name}) into {dbx_web_dir()}"):
             self.problems.append("DBX: not installed")
             return
-        url = f"{DBX_RELEASES}/download/{tag}/{name}"
+        url = release_url(DBX_REPO, f"v{version}", name)
         print(f"  (from {url})")
         if self.dry_run:
             return
@@ -287,10 +348,16 @@ class Setup:
         import zipfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            archive = download(url, Path(tmp) / name)
-            want = download(url + ".sha256", Path(tmp) / "sum").read_text().split()[0].lower()
-            if sha256(archive) != want:
-                self.problems.append("DBX: SHA-256 mismatch; download discarded")
+            want = DBX_SHA256.get(name)
+            if not want:
+                try:
+                    want = download(url + ".sha256", Path(tmp) / "sum").read_text().split()[0].lower()
+                except OSError:
+                    want = None
+            try:
+                archive = fetch_verified(url, Path(tmp) / name, want)
+            except (VerifyError, OSError) as e:
+                self.problems.append(f"DBX: {e}")
                 return
             dest = dbx_web_dir()
             shutil.rmtree(dest, ignore_errors=True)

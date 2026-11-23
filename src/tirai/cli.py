@@ -120,18 +120,39 @@ def cmd_from_trace(args):
     from tirai.trace import from_trace
 
     scenario, env, skipped = from_trace(args.trace, args.output, do_resolve=not args.no_resolve, scope=args.scope)
-    print(f"wrote {args.output} ({len(scenario['steps'])} steps)")
+    return _report_capture(args.output, env, skipped, scenario)
+
+
+def _report_capture(output, env, skipped, scenario=None):
+    import yaml
+
+    scenario = scenario or yaml.safe_load(Path(output).read_text(encoding="utf-8"))
+    print(f"wrote {output} ({len(scenario['steps'])} steps)")
     for msg in skipped:
         print(f"skipped {msg}")
     if env:
         print("set in .env before running: " + ", ".join(env))
-    print(f"review titles/expectations, then: tirai run {args.output} --dry-run")
+    print(f"review titles/expectations, then: tirai run {output} --dry-run")
     return 0
 
 
 def cmd_capture(args):
-    from tirai.system import bsk_bin, run_text
+    from tirai.system import agent_browser_bin, bsk_bin, run_text
 
+    driver = args.driver or os.environ.get("TIRAI_DRIVER") or ("agent-browser" if agent_browser_bin() else "bsk")
+    if driver == "agent-browser":
+        from tirai.capture import capture
+
+        if not agent_browser_bin():
+            print("agent-browser not found; run `tirai setup`")
+            return 1
+        print("recording: do the flow in the browser window, then close it (or press Ctrl+C here)")
+        try:
+            _, env, skipped = capture(args.url, args.output, args.purpose, timeout=args.timeout)
+        except (RuntimeError, OSError) as e:
+            print(f"capture failed: {e}")
+            return 1
+        return _report_capture(args.output, env, skipped)
     if not bsk_bin():
         print("BrowserSkill CLI (bsk) not found; run `tirai setup`")
         return 1
@@ -188,6 +209,24 @@ def cmd_dbx(args):
             time.sleep(1)
     print(f"DBX web did not answer on {url}; see {TIRAI_HOME / 'dbx.log'}")
     return 1
+
+
+def cmd_dbx_connect(args):
+    from tirai.dbxconn import DbxError, connect
+
+    dsn = os.environ.get(args.dsn_env) if args.dsn_env else args.dsn
+    if not dsn:
+        print("give a DSN or --dsn-env NAME")
+        return 1
+    try:
+        action, cid = connect(
+            args.url, dsn, args.name, os.environ.get(args.password_env), args.db_host, test=not args.no_test
+        )
+    except DbxError as e:
+        print(f"error: {e}")
+        return 1
+    print(f"{action} DBX connection {args.name!r} ({cid}) on {args.url}")
+    return 0
 
 
 def cmd_mcp(_args):
@@ -319,10 +358,12 @@ def build_parser():
     trace_opts(s)
     s.set_defaults(fn=cmd_from_trace)
 
-    s = sub.add_parser("capture", help="record a flow you click through once (bsk record) and turn it into a scenario")
+    s = sub.add_parser("capture", help="record a flow you click through once and turn it into a scenario")
     s.add_argument("url")
+    s.add_argument("--driver", choices=["agent-browser", "bsk"], help="default: agent-browser when installed")
+    s.add_argument("--timeout", type=float, default=600, help="agent-browser: stop after this many seconds")
     s.add_argument("--purpose", help="what the flow proves; becomes the scenario name")
-    s.add_argument("--trace-dir", default="trace", help="where bsk writes trace.json (default: trace/)")
+    s.add_argument("--trace-dir", default="trace", help="bsk: where bsk writes trace.json (default: trace/)")
     trace_opts(s)
     s.set_defaults(fn=cmd_capture)
 
@@ -330,6 +371,17 @@ def build_parser():
     s.add_argument("--port", type=int, default=int(os.environ.get("DBX_PORT", 4224)))
     s.add_argument("--detach", "-d", action="store_true", help="run in the background (log: ~/.tirai/dbx.log)")
     s.set_defaults(fn=cmd_dbx)
+    s = sub.add_parser("dbx-connect", help="create/update a DBX web connection from a DSN (no manual DBX setup)")
+    s.add_argument(
+        "dsn", nargs="?", help="postgresql://user:pw@host:port/db (prefer --dsn-env to keep it out of shell history)"
+    )
+    s.add_argument("--dsn-env", help="read the DSN from this environment variable, e.g. EV_DB_DSN")
+    s.add_argument("--name", required=True, help="connection name shown in DBX")
+    s.add_argument("--url", default=os.environ.get("DBX_URL", "http://127.0.0.1:4224/"), help="DBX web URL")
+    s.add_argument("--db-host", help="database host as DBX sees it (e.g. a Docker service name)")
+    s.add_argument("--password-env", default="DBX_PASSWORD", help="env var holding the DBX web password")
+    s.add_argument("--no-test", action="store_true", help="save without asking DBX to test the connection")
+    s.set_defaults(fn=cmd_dbx_connect)
     sub.add_parser("mcp", help="run the TIRAI MCP server on stdio (for MCP-capable agents)").set_defaults(fn=cmd_mcp)
     sub.add_parser("annotate-js", help="print the path of the injectable annotate.js").set_defaults(fn=cmd_asset)
     return p
