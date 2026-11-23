@@ -1,3 +1,0 @@
-quantity,availableStock,expected
-10,5,INSUFFICIENT_STOCK
-5,10,ACCEPTED

@@ -1,58 +1,42 @@
-name: CI Quality Gate
+name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Node ${{ matrix.node }} on ${{ matrix.os }}
+  test:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        node: ['20', '22']
-        os: [ubuntu-latest]
-
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.10', '3.12']
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node.js ${{ matrix.node }}
-        uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build all workspaces (topological)
-        run: npm run build:all
-
-      - name: Typecheck all workspaces
-        run: npm run typecheck:all
-
-      - name: Lint all workspaces
-        run: npm run lint:all
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        id: playwright-cache
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
         with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-
-      - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-
-      - name: Run all workspace tests
-        run: npm run test:all
+          node-version: '22'
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: annotate.js syntax
+        run: node --check src/tirai/assets/annotate.js
+      - name: Tests
+        run: pytest -q

@@ -2,11 +2,11 @@
 
 ## Supported versions
 
-TIRAI is currently evolving as a single active CLI/product line. Security fixes target the latest code on `main` and the latest published release unless a release note states otherwise.
+TIRAI 2.x (evidence recorder) is the active product line; v1 is archived on `archive/tirai-v1` and unsupported. Security fixes target the latest code on `main` and the latest published release unless a release note states otherwise.
 
 ## Reporting a vulnerability
 
-Please do **not** open a public issue for vulnerabilities that could expose credentials, arbitrary code execution, unsafe package installation, malicious source ingestion, or sensitive project data.
+Please do **not** open a public issue for vulnerabilities that could expose credentials, arbitrary code execution, unsafe package installation, leaking secrets into recordings/reports, database writes through evidence runs, or sensitive project data.
 
 Use GitHub's private security reporting / Security Advisory flow when available for this repository. If that channel is unavailable, contact the repository owner privately through GitHub before publishing details.
 

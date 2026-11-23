@@ -1,0 +1,10 @@
+{
+  "name": "tirai-evidence",
+  "version": "2.0.0",
+  "description": "Scenario-driven test evidence recording: BrowserSkill + DBX web + on-screen annotations + ffmpeg video composition.",
+  "author": { "name": "2T Software" },
+  "homepage": "https://github.com/2tsoftwareapp/TIRAI",
+  "repository": "https://github.com/2tsoftwareapp/TIRAI",
+  "license": "MIT",
+  "keywords": ["testing", "evidence", "browser", "recording", "qa"]
+}
