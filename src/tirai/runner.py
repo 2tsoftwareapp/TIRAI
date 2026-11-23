@@ -38,6 +38,7 @@ class Runner:
         self.stop_on_fail = stop_on_fail
         self.tabs = {}
         self.dbx_editor_ready = set()
+        self.console_since = {}
         self.segments = []
         self.seg = None
         settings = scenario.get("settings") or {}
@@ -121,6 +122,32 @@ class Runner:
                 self.pause(2.0)
         elif kind == "sql":
             self.dbx_sql(tab, interpolate(arg))
+        elif kind == "select":
+            self.b.select(tid, arg["selector"], interpolate(arg["value"]))
+            self.pause(0.5)
+        elif kind == "hover":
+            self.b.hover(tid, arg)
+            self.pause(0.5)
+        elif kind == "scroll":
+            self.b.scroll_to(tid, arg)
+            self.pause(0.6)
+        elif kind == "upload":
+            files = arg["file"] if isinstance(arg["file"], list) else [arg["file"]]
+            base = Path(self.sc.get("_dir", "."))
+            paths = [str((base / interpolate(f)).resolve()) for f in files]
+            missing = [f for f in paths if not Path(f).is_file()]
+            if missing:
+                raise ScenarioError(f"upload file not found: {', '.join(missing)}")
+            self.b.upload(tid, arg["selector"], paths)
+            self.pause(1.0)
+        elif kind == "dialog":
+            # Pre-answer native dialogs for the rest of this page (bsk blocks on a real one).
+            ok = "true" if arg == "accept" else "false"
+            self.b.evaluate(
+                tid,
+                f"(()=>{{window.alert=()=>{{}};window.confirm=()=>{ok};"
+                f"window.prompt=(m,d)=>{ok}?(d??''):null;return true}})()",
+            )
         else:
             raise ValueError(f"unknown action {kind}")
 
@@ -146,6 +173,9 @@ class Runner:
         tid = self.tabs[tab]
         if kind == "db":
             return self.check_db(arg)
+        if kind == "no_console_errors":
+            return self.check_console(tab, arg)
+        q = "document.querySelector"
         if kind == "visible":
             expr = (
                 f"(()=>{{const e=document.querySelector({js(arg)});if(!e)return [false,'not found'];"
@@ -158,6 +188,46 @@ class Runner:
                 f"if(!e)return [false,'not found'];const t=e.innerText.trim();"
                 f"return [t.includes({js(arg['text'])}),t.slice(0,160)]}})()"
             )
+        elif kind == "not_visible":
+            expr = (
+                f"(()=>{{const e={q}({js(arg)});if(!e)return [true,'not found'];"
+                "const r=e.getBoundingClientRect();const s=getComputedStyle(e);"
+                "const hidden=r.width===0||r.height===0||s.visibility==='hidden'||s.display==='none';"
+                "return [hidden,'rect '+r.width+'x'+r.height]})()"
+            )
+        elif kind == "text_matches":
+            sel = arg.get("selector")
+            expr = (
+                f"(()=>{{const e={(q + '(' + js(sel) + ')') if sel else 'document.body'};"
+                f"if(!e)return [false,'not found'];const t=e.innerText.trim();"
+                f"return [new RegExp({js(arg['pattern'])},{js(arg.get('flags', ''))}).test(t),t.slice(0,160)]}})()"
+            )
+        elif kind == "value":
+            expr = (
+                f"(()=>{{const e={q}({js(arg['selector'])});if(!e)return [false,'not found'];"
+                f"return [String(e.value)===String({js(interpolate(arg['equals']))}),e.value]}})()"
+            )
+        elif kind == "attribute":
+            expr = (
+                f"(()=>{{const e={q}({js(arg['selector'])});if(!e)return [false,'not found'];"
+                f"const v=e.getAttribute({js(arg['name'])});"
+                f"return [v!==null&&String(v)===String({js(arg['equals'])}),v]}})()"
+            )
+        elif kind == "count":
+            expr = (
+                f"(()=>{{const n=document.querySelectorAll({js(arg['selector'])}).length;"
+                f"return [n==={int(arg['equals'])},n]}})()"
+            )
+        elif kind == "request":
+            status = arg.get("status")
+            expr = (
+                "(()=>{const es=[...performance.getEntriesByType('navigation'),"
+                "...performance.getEntriesByType('resource')]"
+                f".filter(e=>e.name.includes({js(interpolate(arg['url_contains']))}));"
+                f"const st={js(status)};"
+                "return [es.some(e=>st===null||e.responseStatus===st),"
+                "es.slice(-5).map(e=>e.name+' '+e.responseStatus)]})()"
+            )
         elif kind == "url_contains":
             expr = f"[location.href.includes({js(arg)}),location.href]"
         else:
@@ -168,6 +238,23 @@ class Runner:
             if ok or time.time() > deadline:
                 return {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok)}
             self.pause(0.5)
+
+    def console_cursor(self, tab):
+        try:
+            return self.b.console(self.tabs[tab]).get("next_since")
+        except BskError:
+            return None
+
+    def check_console(self, tab, arg):
+        ignore = (arg or {}).get("ignore", []) if isinstance(arg, dict) else []
+        data = self.b.console(self.tabs[tab], self.console_since.get(tab))
+        errors = [
+            e.get("text", "")[:200]
+            for e in data.get("entries", [])
+            if (e.get("level") == "error" or e.get("kind") == "exception")
+            and not any(i in e.get("text", "") for i in ignore)
+        ]
+        return {"type": "no_console_errors", "expected": arg or True, "actual": errors, "ok": not errors}
 
     def check_db(self, arg):
         db = self.sc["databases"][arg.get("database", "default")]
@@ -222,6 +309,8 @@ class Runner:
             print(f"[{step['id']}] {step['title']} ...", flush=True)
             try:
                 self.annotate(tab, [])
+                if any("no_console_errors" in e for e in step.get("expect", [])):
+                    self.console_since[tab] = self.console_cursor(tab)
                 for action in step.get("actions", []):
                     self.do_action(tab, action)
                 for exp in step.get("expect", []):

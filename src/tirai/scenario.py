@@ -6,8 +6,26 @@ from pathlib import Path
 
 import yaml
 
-ACTIONS = {"navigate", "fill", "click", "press", "wait", "wait_for", "sql", "dbx_login"}
-EXPECTS = {"visible", "text_contains", "url_contains", "db"}
+ACTIONS = {
+    "navigate", "fill", "click", "press", "wait", "wait_for", "sql", "dbx_login",
+    "select", "hover", "scroll", "upload", "dialog",
+}  # fmt: skip
+EXPECTS = {
+    "visible", "not_visible", "text_contains", "text_matches", "url_contains",
+    "value", "attribute", "count", "request", "no_console_errors", "db",
+}  # fmt: skip
+# Required keys for mapping-style arguments; validated up front so a dry-run never fails on a typo.
+REQUIRED = {
+    "fill": ("selector", "value"),
+    "select": ("selector", "value"),
+    "upload": ("selector", "file"),
+    "text_contains": ("text",),
+    "text_matches": ("pattern",),
+    "value": ("selector", "equals"),
+    "attribute": ("selector", "name", "equals"),
+    "count": ("selector", "equals"),
+    "request": ("url_contains",),
+}
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
 SETTINGS = {"hold", "timing_scale", "expect_timeout"}
 DBX_KEYS = {"new_query", "editor", "password", "run_key"}
@@ -60,6 +78,25 @@ def _single_key(item, where, allowed, errors):
     return kind
 
 
+def _check_args(kind, arg, where, errors):
+    if kind == "dialog" and arg not in ("accept", "dismiss"):
+        errors.append(f"{where}: dialog must be accept or dismiss")
+    if kind == "text_matches" and isinstance(arg, dict) and "pattern" in arg:
+        try:
+            re.compile(arg["pattern"])
+        except re.error as e:
+            errors.append(f"{where}: invalid pattern ({e})")
+    need = REQUIRED.get(kind)
+    if not need:
+        return
+    if not isinstance(arg, dict):
+        errors.append(f"{where}: {kind} needs a mapping with {', '.join(need)}")
+        return
+    missing = [k for k in need if k not in arg]
+    if missing:
+        errors.append(f"{where}: {kind} is missing {', '.join(missing)}")
+
+
 def validate(sc) -> list[str]:
     """Return a list of human-readable problems; empty means the scenario is runnable."""
     errors = []
@@ -86,7 +123,9 @@ def validate(sc) -> list[str]:
             if key not in DBX_KEYS:
                 errors.append(f"tabs.{name}.dbx.{key}: unknown (allowed: {', '.join(sorted(DBX_KEYS))})")
         for i, a in enumerate(cfg.get("setup", []) or []):
-            _single_key(a, f"tabs.{name}.setup[{i}]", ACTIONS, errors)
+            kind = _single_key(a, f"tabs.{name}.setup[{i}]", ACTIONS, errors)
+            if kind:
+                _check_args(kind, a[kind], f"tabs.{name}.setup[{i}]", errors)
     steps = sc.get("steps")
     if not isinstance(steps, list) or not steps:
         errors.append("steps: at least one step is required")
@@ -112,10 +151,14 @@ def validate(sc) -> list[str]:
             errors.append(f"{where}: expect is required (every step must state what it proves)")
         for j, a in enumerate(st.get("actions", []) or []):
             kind = _single_key(a, f"{where}.actions[{j}]", ACTIONS, errors)
+            if kind:
+                _check_args(kind, a[kind], f"{where}.actions[{j}]", errors)
             if kind == "sql" and tabs.get(st.get("tab"), {}).get("kind") != "dbx":
                 errors.append(f"{where}.actions[{j}]: sql requires a tab with kind: dbx")
         for j, e in enumerate(st.get("expect", []) or []):
             kind = _single_key(e, f"{where}.expect[{j}]", EXPECTS, errors)
+            if kind:
+                _check_args(kind, e[kind], f"{where}.expect[{j}]", errors)
             if kind == "db":
                 arg = e["db"] or {}
                 db = arg.get("database", "default")
@@ -149,4 +192,5 @@ def load(path) -> dict:
     problems = validate(sc)
     if problems:
         raise ScenarioError("invalid scenario:\n  - " + "\n  - ".join(problems))
+    sc["_dir"] = str(Path(path).resolve().parent)  # relative upload files resolve against the scenario
     return sc
