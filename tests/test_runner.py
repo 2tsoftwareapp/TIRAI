@@ -70,8 +70,8 @@ class FakeDriver:
         return {"entries": [], "next_since": 0}
 
     def evaluate(self, tab, expr):
-        if expr.startswith("(()=>{const e=document.querySelector(") and "return e?" in expr:
-            return "ORD-42"  # save
+        if "const v=String(" in expr:
+            return {"v": "ORD-42"}  # save
         if "return [" in expr or expr.startswith("[location"):
             return [self.ok, "actual"]
         self._log("evaluate", tab, expr[:40])

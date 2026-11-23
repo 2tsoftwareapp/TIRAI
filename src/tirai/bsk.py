@@ -129,6 +129,23 @@ class Bsk:
     def tab_create(self, url):
         return self.run("tab", "create", "--url", url)["tab_id"]
 
+    def tab_list(self):
+        return [{"id": t["tab_id"], "url": t.get("url", "")} for t in self.run("tab", "list").get("tabs", [])]
+
+    def clear_state(self, tab, cookies=True):
+        """Local/session storage and script-visible cookies (bsk cannot drop HttpOnly cookies)."""
+        expr = (
+            "(()=>{localStorage.clear();sessionStorage.clear();"
+            + (
+                "document.cookie.split(';').forEach(c=>{const n=c.split('=')[0].trim();"
+                "if(n)document.cookie=n+'=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/'});"
+                if cookies
+                else ""
+            )
+            + "return true})()"
+        )
+        return self.evaluate(tab, expr)
+
     def tab_select(self, tab):
         return self.run("tab", "select", str(tab))
 

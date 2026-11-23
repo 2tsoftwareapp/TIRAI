@@ -149,6 +149,23 @@ class AgentBrowser:
         self.use(tab)
         return self.run("wait", selector, "--timeout", _ms(timeout), timeout=120)
 
+    def tab_list(self):
+        """[{id, url}] of every page tab in the session (popups opened by the page included)."""
+        tabs = self.run("tab", "list").get("tabs", [])
+        return [{"id": t["tabId"], "url": t.get("url", "")} for t in tabs if t.get("type", "page") == "page"]
+
+    def set_viewport(self, tab, width, height):
+        self.use(tab)
+        return self.run("set", "viewport", str(width), str(height))
+
+    def clear_state(self, tab, cookies=True):
+        """Drop cookies (whole session) and this origin's local/session storage."""
+        self.use(tab)
+        if cookies:
+            self.run("cookies", "clear")
+        self.run("storage", "local", "clear")
+        self.run("storage", "session", "clear")
+
     def tab_create(self, url):
         self.active = self.run("tab", "new", url, timeout=120)["tabId"]
         return self.active
