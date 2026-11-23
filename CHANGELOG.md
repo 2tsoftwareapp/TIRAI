@@ -6,6 +6,23 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 
 ## [Unreleased]
 
+### Fixed
+
+- `tirai setup` reuses tools already on the machine instead of asking to install them again: a DBX web already
+  running (`DBX_URL` / port 4224), `dbx-web` on PATH or an existing `t8y2/dbx` Docker container/image; agent-browser's
+  Chrome when `agent-browser doctor` says it is installed and launches (no more `install --with-deps` / sudo on every
+  run); the browser-skill agent skill when bsk reports it installed; the BrowserSkill extension when `bsk doctor`
+  shows it connected. bsk is no longer offered when agent-browser is present (`tirai setup --only browserskill`).
+- agent-browser now records with the ffmpeg TIRAI selected (e.g. setup's copy in `~/.tirai/bin`) instead of an old
+  system ffmpeg on PATH, which failed with `ffmpeg write failed: Broken pipe`.
+- Any ffmpeg >= 6.0 anywhere on PATH (or Homebrew/Linuxbrew/snap dirs) is used before downloading one.
+- `tirai dbx` reuses a DBX web that is already running or an existing DBX Docker container.
+- Re-running `install.sh` / `install.ps1` keeps an installed `tirai` of the same version (`TIRAI_FORCE=1` reinstalls).
+
+### Added
+
+- `tirai setup --only <steps>`.
+
 ## [2.2.0]
 
 ### Added

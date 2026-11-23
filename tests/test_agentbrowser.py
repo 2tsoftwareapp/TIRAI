@@ -11,7 +11,7 @@ class FakeCli:
     def __init__(self, replies):
         self.replies, self.calls = replies, []
 
-    def __call__(self, cmd, timeout=None, input=None):
+    def __call__(self, cmd, timeout=None, input=None, env=None):
         self.calls.append((cmd, input))
         reply = self.replies.get(cmd[4] if len(cmd) > 4 else "", {"success": True, "data": {}})
         code = 0 if reply.get("success") else 1

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tirai import install
 from tirai.system import (
+    DBX_IMAGE,
     HOME,
     IS_MAC,
     IS_WINDOWS,
@@ -18,13 +19,15 @@ from tirai.system import (
     TIRAI_BIN,
     agent_browser_bin,
     bsk_bin,
+    dbx_docker,
     dbx_web_bin,
     dbx_web_dir,
     ffmpeg_bin,
     ffmpeg_version,
-    find_bin,
+    find_dbx,
     find_font,
     platform_arch,
+    run_text,
 )
 
 BSK_INSTALLER = "https://raw.githubusercontent.com/Tencent/BrowserSkill/main/install.{ext}"
@@ -50,7 +53,6 @@ DBX_SHA256 = {
 # BtbN rebuilds "latest" daily, so the archive is checked against that release's checksums.sha256.
 FFMPEG_RELEASE = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
 FFMPEG_ASSET = "ffmpeg-n8.1-latest-{plat}-gpl-8.1.{ext}"
-DBX_IMAGE = "t8y2/dbx:latest"
 
 
 class VerifyError(Exception):
@@ -239,7 +241,11 @@ class Setup:
         if ver and ver >= MIN_FFMPEG:
             print(f"  ok ({ffmpeg_bin()}, {ver[0]}.{ver[1]})")
             return
-        print(f"  {'too old: ' + '.'.join(map(str, ver)) if ver else 'not found'}")
+        if ver:
+            print(f"  {ffmpeg_bin()} is {ver[0]}.{ver[1]}: too old (agent-browser recording breaks below 6.0)")
+            print(f"  a private copy goes to {TIRAI_BIN}; the system ffmpeg is left as it is")
+        else:
+            print("  not found")
         url = ffmpeg_asset()
         if not url:  # macOS: Homebrew ships current ffmpeg
             cmd = package_install_cmd(["ffmpeg"])
@@ -315,24 +321,51 @@ class Setup:
                 shutil.move(str(got), found)
             found.chmod(0o755)
         print(f"  ok ({found})")
-        # Chrome for Testing; on Linux --with-deps also installs the browser's system libraries.
-        extra = ["--with-deps"] if not (IS_WINDOWS or IS_MAC) and (os.geteuid() == 0 or shutil.which("sudo")) else []
-        if not self.execute([str(found), "install", *extra]) and not self.dry_run:
-            self.problems.append("agent-browser: `agent-browser install` (Chrome for Testing) failed")
+        self.agent_browser_chrome(str(found))
+
+    def agent_browser_chrome(self, exe):
+        """Download Chrome for Testing / Linux libraries only when agent-browser's own doctor says they're missing."""
+        state = agent_browser_state(exe)
+        if state == "ok":
+            print("  browser ok (agent-browser doctor: Chrome found, headless launch works)")
+            return
+        if state in ("no-chrome", None):
+            if state is None:
+                print("  could not run `agent-browser doctor`; installing the browser to be safe")
+            if not self.confirm("download Chrome for Testing (agent-browser install)"):
+                self.problems.append("agent-browser: no browser; run `agent-browser install`")
+                return
+            if not self.execute([exe, "install"]) and not self.dry_run:
+                self.problems.append("agent-browser: `agent-browser install` (Chrome for Testing) failed")
+                return
+            if self.dry_run:
+                return
+            state = agent_browser_state(exe)
+        if state == "launch-failed" and not (IS_WINDOWS or IS_MAC):
+            print("  Chrome is installed but does not start: system libraries are missing")
+            if self.confirm("install Chrome's system libraries with the package manager (sudo)"):
+                if self.execute([exe, "install", "--with-deps"]) and agent_browser_state(exe) == "ok":
+                    return
+            self.problems.append("agent-browser: Chrome does not start; run `agent-browser install --with-deps`")
+        elif state != "ok":
+            self.problems.append("agent-browser: browser check failed; run `agent-browser doctor`")
 
     def dbx(self):
         print("- DBX web (database UI)")
-        if dbx_web_bin():
-            print(f"  ok ({dbx_web_bin()})")
+        found = find_dbx()
+        if found:
+            kind, what = found
+            hint = {"running": "already running", "binary": "installed", "docker": "Docker"}[kind]
+            print(f"  ok ({hint}: {what})")
             return
         version = os.environ.get("TIRAI_DBX_VERSION") or DBX_VERSION
         name = dbx_asset(version)
         if not name:
-            docker = find_bin("docker")
-            if docker:
+            d = dbx_docker()
+            if d:
                 print(f"  no dbx-web build for this platform; using Docker image {DBX_IMAGE}")
                 if self.confirm(f"docker pull {DBX_IMAGE}"):
-                    self.execute([docker, "pull", DBX_IMAGE])
+                    self.execute([d[0], "pull", DBX_IMAGE])
             else:
                 # Optional: only scenarios with a database tab need DBX.
                 print("  skipped: no dbx-web build for this platform; install Docker, then `tirai dbx`")
@@ -376,10 +409,13 @@ class Setup:
         else:
             self.problems.append("DBX: package extracted but dbx-web binary not found")
 
-    def browserskill(self):
+    def browserskill(self, optional=False):
         print("- BrowserSkill CLI (bsk)")
         if bsk_bin():
             print(f"  ok ({bsk_bin()})")
+            return
+        if optional:
+            print("  not installed (optional, only for `driver: bsk`); later: `tirai setup --only browserskill`")
             return
         if not self.confirm("install BrowserSkill CLI from github.com/Tencent/BrowserSkill"):
             self.problems.append("bsk: not installed")
@@ -405,15 +441,63 @@ class Setup:
         else:
             print(f"  would install tirai-evidence for: {', '.join(agents)}")
         bsk = bsk_bin()
-        harness = [a for a in agents if a in ("claude", "codex", "cursor")]
+        ids = {"claude": "claude-code", "codex": "codex", "cursor": "cursor"}
+        harness = [ids[a] for a in agents if a in ids]
         if bsk_skill and bsk and harness:
-            ids = {"claude": "claude-code", "codex": "codex", "cursor": "cursor"}
-            args = [x for a in harness for x in ("--harness", ids[a])]
-            self.execute([bsk, "install-skill", *args, "--yes", "--force"])
+            have = bsk_skill_installed(bsk)
+            todo = [h for h in harness if h not in have]
+            if not todo:
+                print(f"  browser-skill already installed for: {', '.join(harness)}")
+                return
+            self.execute([bsk, "install-skill", *[x for h in todo for x in ("--harness", h)], "--yes"])
+
+    def browserskill_extension(self):
+        print("- BrowserSkill browser extension (only for `driver: bsk`)")
+        bsk = bsk_bin()
+        if bsk:
+            from tirai.doctor import bsk_doctor
+
+            ok, detail = bsk_doctor(bsk)
+            if ok:
+                print(f"  ok ({detail})")
+                return
+        print("  install 'BrowserSkill' from the Chrome Web Store / Edge Add-ons and enable it (manual step)")
 
 
-def run(agents=None, project=None, yes=False, dry_run=False, skip=()):
+STEPS = ("ffmpeg", "agent-browser", "dbx", "browserskill", "skills")
+
+
+def agent_browser_state(exe):
+    """'ok' | 'no-chrome' | 'launch-failed' from `agent-browser doctor --offline --json`; None if it can't run."""
+    import json
+
+    try:
+        p = run_text([exe, "doctor", "--offline", "--json"], timeout=180)
+        checks = {c.get("id", ""): c.get("status") for c in json.loads(p.stdout.strip().splitlines()[-1])["checks"]}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError):
+        return None
+    if checks.get("chrome.installed") not in ("pass", "warn"):
+        return "no-chrome"
+    if any(k.startswith("launch") and v == "fail" for k, v in checks.items()):
+        return "launch-failed"
+    return "ok"
+
+
+def bsk_skill_installed(bsk):
+    """Harness ids that already have the browser-skill skill (`bsk install-skill --list --json`)."""
+    import json
+
+    try:
+        p = run_text([bsk, "install-skill", "--list", "--json"], timeout=60)
+        return {h["id"] for h in json.loads(p.stdout)["harnesses"] if h.get("installed")}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return set()
+
+
+def run(agents=None, project=None, yes=False, dry_run=False, skip=(), only=()):
     s = Setup(yes=yes, dry_run=dry_run)
+    if only:
+        skip = set(skip) | (set(STEPS) - set(only))
     print(f"TIRAI setup ({sys.platform})")
     if "ffmpeg" not in skip:
         s.ffmpeg()
@@ -424,12 +508,11 @@ def run(agents=None, project=None, yes=False, dry_run=False, skip=()):
     if "dbx" not in skip:
         s.dbx()
     if "browserskill" not in skip:
-        s.browserskill()
+        s.browserskill(optional=bool(agent_browser_bin()) and "browserskill" not in only)
     if "skills" not in skip:
         s.skills(agents if agents is not None else detect_agents(), project, "browserskill" not in skip)
-    if "browserskill" not in skip:
-        print("- BrowserSkill browser extension (only for `driver: bsk` and `tirai capture`)")
-        print("  install 'BrowserSkill' from the Chrome Web Store / Edge Add-ons and enable it (manual step)")
+    if "browserskill" not in skip and bsk_bin():
+        s.browserskill_extension()
     if s.problems:
         print("\nsetup incomplete:\n  - " + "\n  - ".join(s.problems))
         return 1

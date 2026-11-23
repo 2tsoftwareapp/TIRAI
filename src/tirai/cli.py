@@ -22,8 +22,16 @@ def cmd_setup(args):
     from tirai.install import TARGETS
 
     agents = (list(TARGETS) if "all" in args.agent else args.agent) if args.agent else None
-    skip = {x.strip() for item in args.skip for x in item.split(",") if x.strip()}
-    return bootstrap.run(agents=agents, project=args.project, yes=args.yes, dry_run=args.dry_run, skip=skip)
+
+    def split(items):
+        return {x.strip() for item in items for x in item.split(",") if x.strip()}
+
+    skip, only = split(args.skip), split(args.only)
+    unknown = (skip | only) - set(bootstrap.STEPS)
+    if unknown:
+        print(f"unknown setup step(s): {', '.join(sorted(unknown))} (use {', '.join(bootstrap.STEPS)})")
+        return 2
+    return bootstrap.run(agents=agents, project=args.project, yes=args.yes, dry_run=args.dry_run, skip=skip, only=only)
 
 
 def load_env(args):
@@ -174,32 +182,44 @@ def cmd_dbx(args):
     import time
     import urllib.request
 
-    from tirai.bootstrap import DBX_IMAGE
-    from tirai.system import TIRAI_HOME, dbx_web_bin, dbx_web_dir, find_bin
+    from tirai.system import DBX_IMAGE, TIRAI_HOME, dbx_docker, dbx_package_root, dbx_running, dbx_web_bin
 
     url = f"http://127.0.0.1:{args.port}/"
+    if dbx_running(url):
+        print(f"DBX web already running: {url}")
+        return 0
     binary = dbx_web_bin()
+    docker = dbx_docker()
     if binary:
-        env = {**os.environ, "DBX_PORT": str(args.port), "DBX_PACKAGE_ROOT": str(dbx_web_dir())}
+        root = dbx_package_root(binary)
+        env = {**os.environ, "DBX_PORT": str(args.port), "DBX_PACKAGE_ROOT": str(root)}
         env.setdefault("DBX_DATA_DIR", str(TIRAI_HOME / "dbx-data"))
         Path(env["DBX_DATA_DIR"]).mkdir(parents=True, exist_ok=True)
         if not args.detach:
             print(f"DBX web: {url} (Ctrl+C to stop)")
-            return subprocess.call([binary], env=env, cwd=str(dbx_web_dir()))
+            return subprocess.call([binary], env=env, cwd=str(root))
+        TIRAI_HOME.mkdir(parents=True, exist_ok=True)
         log = open(TIRAI_HOME / "dbx.log", "ab")  # noqa: SIM115 - handed to the detached process
         flags = {"creationflags": 0x00000008} if os.name == "nt" else {"start_new_session": True}
-        subprocess.Popen([binary], env=env, cwd=str(dbx_web_dir()), stdout=log, stderr=log, **flags)
-    else:
-        docker = find_bin("docker")
-        if not docker:
-            print("DBX web not installed: run `tirai setup` (or install Docker)")
-            return 1
-        name = "tirai-dbx"
-        if subprocess.call([docker, "start", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
-            pw = ["-e", "DBX_PASSWORD"] if os.environ.get("DBX_PASSWORD") else []
-            cmd = [docker, "run", "-d", "--name", name, "-p", f"{args.port}:4224", "-v", "tirai-dbx-data:/app/data"]
-            if subprocess.call([*cmd, *pw, DBX_IMAGE]) != 0:
+        subprocess.Popen([binary], env=env, cwd=str(root), stdout=log, stderr=log, **flags)
+    elif docker:
+        exe, containers, _ = docker
+        if containers:  # reuse the user's existing DBX container (it keeps its own port mapping)
+            name = containers[0][0]
+            print(f"starting existing DBX container {name}")
+            if subprocess.call([exe, "start", name], stdout=subprocess.DEVNULL) != 0:
                 return 1
+            port = subprocess.run([exe, "port", name, "4224"], capture_output=True, text=True).stdout.split("\n")[0]
+            if port.rsplit(":", 1)[-1].isdigit():
+                url = f"http://127.0.0.1:{port.rsplit(':', 1)[-1]}/"
+        else:
+            pw = ["-e", "DBX_PASSWORD"] if os.environ.get("DBX_PASSWORD") else []
+            cmd = [exe, "run", "-d", "--name", "tirai-dbx", "-p", f"{args.port}:4224", "-v", "tirai-dbx-data:/app/data"]
+            if subprocess.call([*cmd, *pw, f"{DBX_IMAGE}:latest"]) != 0:
+                return 1
+    else:
+        print("DBX web not installed: run `tirai setup` (or install Docker)")
+        return 1
     for _ in range(60):
         try:
             urllib.request.urlopen(url, timeout=2)  # noqa: S310 - local URL
@@ -271,7 +291,9 @@ def build_parser():
 
     sub.add_parser("doctor", help="check ffmpeg, BrowserSkill, fonts and optional drivers").set_defaults(fn=cmd_doctor)
 
-    s = sub.add_parser("setup", help="install ffmpeg, BrowserSkill CLI and agent skills for this OS")
+    s = sub.add_parser(
+        "setup", help="install what is missing (ffmpeg, agent-browser, DBX, skills); reuses tools already here"
+    )
     s.add_argument(
         "--agent",
         action="append",
@@ -286,6 +308,7 @@ def build_parser():
         default=[],
         help="ffmpeg, agent-browser, dbx, browserskill, skills (comma or space separated)",
     )
+    s.add_argument("--only", action="extend", nargs="+", default=[], help="run only these steps (same names)")
     s.add_argument("--yes", "-y", action="store_true", help="install without prompting")
     s.add_argument("--dry-run", action="store_true", help="print what would be installed")
     s.set_defaults(fn=cmd_setup)

@@ -6,11 +6,11 @@ from tirai.system import (
     MIN_FFMPEG,
     agent_browser_bin,
     bsk_bin,
-    dbx_web_bin,
     ffmpeg_bin,
     ffmpeg_version,
     ffprobe_bin,
     find_bin,
+    find_dbx,
     find_font,
     run_text,
 )
@@ -47,13 +47,12 @@ def checks():
     if bsk:
         ok, detail = bsk_doctor(bsk)
         yield "bsk doctor", ok, detail, not ab
-    dbx = dbx_web_bin()
-    yield (
-        "DBX web",
-        bool(dbx or find_bin("docker")),
-        dbx or ("via Docker" if find_bin("docker") else "run `tirai setup`"),
-        False,
-    )
+    dbx = find_dbx()
+    if dbx:
+        yield "DBX web", True, f"{dbx[0]}: {dbx[1]}", False
+    else:
+        hint = "`tirai dbx` will pull the Docker image" if find_bin("docker") else "run `tirai setup`"
+        yield "DBX web", False, f"not found ({hint})", False
     font = find_font()
     yield "subtitle font", bool(font), font or "missing: set TIRAI_FONT to a Unicode .ttf", True
     for mod, extra in (("psycopg", "postgres"), ("pymysql", "mysql")):

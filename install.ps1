@@ -108,8 +108,23 @@ function Install-FromSource {
   $script:Exe = Join-Path $TiraiHome 'venv\Scripts\tirai.exe'
 }
 
+# Re-running the installer keeps an existing tirai of the same version (TIRAI_FORCE=1 reinstalls).
 $Exe = $null
+$Shim = Join-Path $BinDir 'tirai.cmd'
+if ($env:TIRAI_FORCE -ne '1' -and -not $env:TIRAI_BINARY -and -not $env:TIRAI_SOURCE -and (Test-Path $Shim)) {
+  $Have = ((& $Shim --version 2>$null) -replace '^tirai ', '').Trim()
+  $Want = if ($env:TIRAI_VERSION) { $env:TIRAI_VERSION.TrimStart('v') } else {
+    try { ((Invoke-RestMethod "https://raw.githubusercontent.com/$Repo/$Ref/pyproject.toml") -split "`n" |
+      Where-Object { $_ -match '^version = "(.*)"' } | Select-Object -First 1) -replace '^version = "(.*)"\s*$', '$1' } catch { '' }
+  }
+  if ($Have -and $Have -eq $Want.Trim()) {
+    Log "tirai $Have is already installed ($Shim); skipping reinstall (TIRAI_FORCE=1 to force)"
+    $Mode = 'keep'
+    $Exe = ((Get-Content $Shim | Select-Object -Last 1) -replace '^"([^"]+)".*$', '$1')
+  }
+}
 switch ($Mode) {
+  'keep' { }
   'binary' { if (-not (Install-Binary)) { Die 'Binary install failed (try --source).' } }
   'source' { Install-FromSource }
   'auto' { if (-not (Install-Binary)) { Log 'Falling back to building from source'; Install-FromSource } }
