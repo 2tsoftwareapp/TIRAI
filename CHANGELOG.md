@@ -62,6 +62,8 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 
 ### Fixed
 
+- DBX with several connections: the query editor is pointed at `dbx.connection` (default: `dbx.connect.name`);
+  with none selected the step fails with a clear message instead of `grid body not found`.
 - Final UAT fixes: `tirai index` verifies `manifest.sha256.sig` (a regenerated manifest with a stale signature shows
   `modified (bad signature)`); `expect: db` without `columns:` uses the keys of the first expected row; the `phone`
   PII rule no longer matches dates/timestamps; MCP exposes `sign`, `export`, `scan_pii`, `index`, `from_spec`;

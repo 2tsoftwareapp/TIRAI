@@ -1,5 +1,8 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from tirai import mcp, ocr, runner
 
@@ -33,3 +36,39 @@ def test_mcp_exposes_every_evidence_command():
 def test_skill_scenario_reference_matches_docs():
     ref = ROOT / "skills/tirai-evidence/references/scenario.md"
     assert ref.read_text(encoding="utf-8") == (ROOT / "docs/scenario-format.md").read_text(encoding="utf-8")
+
+
+class _DbxTab:
+    def __init__(self, current, options=("shop", "other")):
+        self.current, self.options, self.clicked = current, options, []
+
+    def evaluate(self, tab, expr):
+        if expr.endswith(".click()"):
+            self.clicked.append("trigger")
+            return None
+        if "popover-content" in expr:
+            hit = next((o for o in self.options if json.dumps(o) in expr), None)
+            self.clicked.append(hit)
+            return bool(hit)
+        return self.current
+
+
+def _dbx_runner(tab):
+    return SimpleNamespace(tabs={"db": "t1"}, b=tab, pause=lambda s: None)
+
+
+def test_dbx_editor_without_connection_fails_clearly():
+    me = _dbx_runner(_DbxTab("Select connection"))
+    with pytest.raises(runner.ScenarioError, match=r"tabs\.db\.dbx\.connection"):
+        runner.Runner.dbx_select_connection(me, "db", {})
+
+
+def test_dbx_selects_connect_name_and_skips_when_already_selected():
+    tab = _DbxTab("Select connection")
+    runner.Runner.dbx_select_connection(_dbx_runner(tab), "db", {"connect": {"name": "shop"}})
+    assert tab.clicked == ["trigger", "shop"]
+    same = _DbxTab("shop")
+    runner.Runner.dbx_select_connection(_dbx_runner(same), "db", {"connection": "shop"})
+    assert same.clicked == []
+    with pytest.raises(runner.ScenarioError, match="not found: nope"):
+        runner.Runner.dbx_select_connection(_dbx_runner(_DbxTab("shop")), "db", {"connection": "nope"})

@@ -28,6 +28,15 @@ DBX_DEFAULTS = {
 }
 
 
+DBX_NO_CONNECTION = "Select connection"
+# The editor toolbar's connection picker: the popover trigger showing a connection name or the placeholder.
+DBX_CONN_TRIGGER = (
+    "(()=>{const n=new Set([...document.querySelectorAll('.tree-connection-label')].map(e=>e.innerText.trim()));"
+    "return [...document.querySelectorAll('button[data-slot=popover-trigger]')]"
+    f".find(b=>{{const x=b.innerText.trim();return x==={json.dumps(DBX_NO_CONNECTION)}||n.has(x)}})}})()"
+)
+
+
 def js(v):
     return json.dumps(v, ensure_ascii=False)
 
@@ -294,6 +303,7 @@ class Runner:
             )
             if opened:
                 self.pause(1.5)
+            self.dbx_select_connection(tab, cfg)
             self.dbx_editor_ready.add(tab)
         self.b.fill(tid, cfg["editor"], sql)
         self.pause(0.6)
@@ -301,6 +311,31 @@ class Runner:
         self.pause(2.0)
         if cfg["error"] and self.b.evaluate(tid, f"!!document.querySelector({js(cfg['error'])})"):
             raise ScenarioError(f"sql failed in DBX: {sql[:80]}")
+
+    def dbx_select_connection(self, tab, cfg):
+        """Point the query editor at `dbx.connection` (default: `dbx.connect.name`); fail clearly when none is set."""
+        tid = self.tabs[tab]
+        want = cfg.get("connection") or (cfg.get("connect") or {}).get("name")
+        want = interpolate(want) if want else None
+        current = self.b.evaluate(tid, f"(()=>{{const t={DBX_CONN_TRIGGER};return t?t.innerText.trim():null}})()")
+        if current is None or current == want or (not want and current != DBX_NO_CONNECTION):
+            return
+        if not want:
+            raise ScenarioError(
+                f"DBX query editor has no connection selected; set tabs.{tab}.dbx.connection to a DBX connection name"
+            )
+        self.b.evaluate(tid, f"{DBX_CONN_TRIGGER}.click()")
+        self.pause(0.5)
+        picked = self.b.evaluate(
+            tid,
+            "(()=>{const p=document.querySelector('[data-slot=popover-content]');"
+            f"const o=p&&[...p.querySelectorAll('button')].find(b=>b.innerText.trim()==={js(want)});"
+            "if(!o){document.activeElement&&document.activeElement.dispatchEvent("
+            "new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return false}o.click();return true})()",
+        )
+        if not picked:
+            raise ScenarioError(f"DBX connection not found: {want}")
+        self.pause(1.0)
 
     # ---------- expectations ----------
     def check(self, tab, exp):

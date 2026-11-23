@@ -61,6 +61,7 @@ tabs:
       editor: ".cm-content"            # SQL editor element
       password: "input[type=password]" # DBX login field
       run_key: "Ctrl+Enter"            # default: Meta+Enter on macOS, Ctrl+Enter elsewhere
+      connection: shop-readonly        # connection the query editor uses (default: connect.name); needed when DBX has several
       connect:                         # optional: create/update the DBX connection before the tab opens
         name: shop-readonly            # connection name in DBX
         database: default              # key in `databases:` whose DSN is used (default: default)
