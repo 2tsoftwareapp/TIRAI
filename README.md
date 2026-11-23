@@ -4,8 +4,8 @@
 
 ### Test evidence your AI agent records for you.
 
-Describe a test scenario. Your agent runs it in a real browser, checks the database in a second tab,<br>
-draws arrows and boxes on screen, and hands you **one subtitled MP4 plus a step report**.
+Describe a test scenario. Your agent runs it in a real browser or desktop app, checks the database in a second tab,<br>
+draws arrows and boxes on screen, and hands you **one subtitled MP4, HTML/Excel/JUnit reports and a signed manifest**.
 
 [![CI](https://github.com/2tsoftwareapp/TIRAI/actions/workflows/ci.yml/badge.svg)](https://github.com/2tsoftwareapp/TIRAI/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
@@ -33,6 +33,9 @@ TIRAI turns it into a repeatable artifact:
 - **Dry-run before record.** Steps are executed once without recording, so the final video never shows failed attempts or agent "thinking" pauses.
 - **UI and database in one story.** The app and [DBX web](https://github.com/t8y2/dbx) run in browser tabs; TIRAI records each tab and cuts them back into scenario order.
 - **Annotations like Snagit.** Boxes, circles, arrows, labels, highlights and blur are drawn inside the page and follow the real element positions.
+- **Web and desktop.** Browser tabs run on agent-browser or BrowserSkill; native apps (`app:` tabs) run on [agent-desktop](https://github.com/vercel-labs/agent-desktop) through the accessibility tree.
+- **Watchable video.** Camera follow (zoom and pan between targets), fast-forwarded waits, chapters, multilingual subtitles and optional voice-over.
+- **Evidence you can hand over.** PII masking plus an OCR pass over the final video, `manifest.sha256` with SSH signature and RFC 3161 timestamp, JUnit/Xray/TestRail files, and one HTML index across runs.
 - **Built for agents.** Ships as a skill for Claude Code, Codex, Antigravity, Cursor and Devin. Every command also works by hand.
 
 <table>
@@ -147,6 +150,7 @@ TIRAI is the orchestration layer. It does not reinvent browser automation or a d
 
 | Layer | Provided by |
 |---|---|
+| Desktop apps (accessibility tree), screen recording with ffmpeg | [agent-desktop](https://github.com/vercel-labs/agent-desktop) (`app:` tabs; Linux needs X11 + AT-SPI) |
 | Browser control, screenshots, tab recording | [agent-browser](https://github.com/vercel-labs/agent-browser) (default, headless or `--headed`) or [Tencent BrowserSkill](https://github.com/Tencent/BrowserSkill) (`bsk`, your real browser) |
 | Database UI in the browser (100+ engines) | [DBX web](https://github.com/t8y2/dbx) |
 | Scenario runner, DOM and DB assertions, annotation overlay, timeline, video composition, report | **TIRAI** (Python, ffmpeg, `annotate.js`) |
@@ -230,7 +234,7 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 | `tirai compose <timeline.json>` | Rebuild the video and report from a recorded timeline |
 | `tirai capture <url>` | Click a flow once in the browser; get a scenario (`from-trace` converts a bsk trace) |
 | `tirai dbx-connect` | Create/update the DBX connection from a DSN (`--dsn-env EV_DB_DSN --name shop`) |
-| `tirai mcp` | Run the MCP server (validate, dry_run, record, compose, verify, from_trace) |
+| `tirai mcp` | Run the MCP server (validate, dry_run, record, compose, verify, sign, export, scan_pii, index, from_spec, capture, …) |
 | `tirai install-skill` | Install the skill for an agent or into any directory |
 | `tirai from-spec <file>` | Draft a scenario from Gherkin `.feature`, a Markdown table or CSV (`--url` resolves selectors live) |
 | `tirai export <dir>` | Write `junit.xml`, `xray.json` (Xray import) and `testrail.csv` (TestRail import); nothing is uploaded |
@@ -244,7 +248,9 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 - **Secrets** are referenced as `${ENV_VAR}` (shell or a git-ignored `.env`) and never written to timelines, reports or video metadata.
 - **Database access is read-only**: use a read-only user for both DBX and `expect: db`.
 - **Blur is instant**: masks render before the next frame, so sensitive values never appear in the recording.
-- **Automatic PII masking** (`privacy:`): emails, phones, cards, tokens and custom patterns are covered on every page.
+- **Automatic PII masking** (`privacy:`): emails, phones, cards, tokens and custom patterns are covered on every page; `privacy.ocr` / `tirai scan-pii` OCR the final video to catch text drawn on canvas (DBX grids, desktop apps).
+- **Tamper evidence**: `tirai sign` signs `manifest.sha256` with an SSH key (optional RFC 3161 timestamp); `tirai verify --pubkey` rejects edited files, regenerated manifests and the wrong key.
+- **Downloads are pinned**: `tirai setup` checks SHA-256 for agent-browser, agent-desktop, DBX web and ffmpeg.
 - **Browser profile**: agent-browser uses its own Chrome for Testing profile; BrowserSkill drives your real browser, so use a dedicated profile or Agent Window.
 
 Report vulnerabilities via [SECURITY.md](SECURITY.md).
