@@ -39,7 +39,11 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
 
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
-- Find selectors with `bsk open <url>` / `bsk snapshot` before writing them; do not guess.
+- Find selectors with `bsk open <url>` / `bsk snapshot` before writing them; do not guess. Or let the user click
+  the flow once: `tirai capture <url> -o <file>` writes the scenario from a `bsk record` trace.
+- Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `save:` to reuse on-screen values as `{{name}}`.
+- Video: `zoom: <selector>` on a step, `layout: split` to show UI and DB side by side; `subtitle: {en, vi}` + `--lang`.
+- Real data on screen: add `privacy: { mask: [email, phone, card, token] }` (and `keep:` for the record under test).
 - Secrets go in `${ENV_VAR}` only. Put values in a git-ignored `.env` next to the scenario
   (loaded automatically, or pass `--env-file`); never write values into the scenario.
 - DB checks must use a **read-only** database user.

@@ -18,3 +18,27 @@ Add `--project <dir>` to install into a repository instead of the user profile, 
 Also install BrowserSkill's own skill so the agent can explore pages: `bsk install-skill --harness <id>`.
 
 Agents without skill support can read `AGENTS.md` / `skills/tirai-evidence/SKILL.md` directly.
+
+## MCP server
+
+MCP-capable agents can call TIRAI as tools instead of the shell:
+
+```json
+{ "mcpServers": { "tirai": { "command": "tirai", "args": ["mcp"] } } }
+```
+
+Tools: `doctor`, `init`, `validate`, `dry_run`, `record`, `compose`, `verify`, `from_trace`, `annotate_js`. Each
+accepts an optional `cwd`; results are the CLI output, with `isError` set when the command fails.
+
+## Capture a flow instead of writing it
+
+```bash
+tirai capture http://127.0.0.1:8080/ --purpose "Locked account is rejected" -o scenarios/locked.yaml
+```
+
+BrowserSkill opens its Agent Window and records what you click (`bsk record`); press finish in the browser.
+TIRAI replays the trace to resolve every target to a CSS selector, splits it into steps at each click/navigation
+and derives an expectation from what changed (new URL or new text). Redacted values such as passwords become
+`${PASSWORD}`-style placeholders. Review titles and expectations, add `annotate:`, then dry-run.
+`tirai from-trace <trace dir> -o file.yaml` converts an existing trace (`--no-resolve` skips the replay and
+leaves `TODO role=… name=…` selectors).

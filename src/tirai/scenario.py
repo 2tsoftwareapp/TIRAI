@@ -1,5 +1,7 @@
 """Scenario loading, validation and `${ENV}` interpolation."""
 
+import copy
+import itertools
 import os
 import re
 from pathlib import Path
@@ -8,7 +10,7 @@ import yaml
 
 ACTIONS = {
     "navigate", "fill", "click", "press", "wait", "wait_for", "sql", "dbx_login",
-    "select", "hover", "scroll", "upload", "dialog",
+    "select", "hover", "scroll", "upload", "dialog", "save",
 }  # fmt: skip
 EXPECTS = {
     "visible", "not_visible", "text_contains", "text_matches", "url_contains",
@@ -25,11 +27,15 @@ REQUIRED = {
     "attribute": ("selector", "name", "equals"),
     "count": ("selector", "equals"),
     "request": ("url_contains",),
+    "save": ("name", "selector"),
 }
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
 SETTINGS = {"hold", "timing_scale", "expect_timeout"}
+PII_RULES = {"email", "phone", "card", "token"}
+PRIVACY_KEYS = {"mask", "patterns", "selectors", "keep", "inputs"}
 DBX_KEYS = {"new_query", "editor", "password", "run_key"}
 ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
 class ScenarioError(ValueError):
@@ -47,6 +53,105 @@ def interpolate(value):
         return os.environ[m.group(1)]
 
     return ENV_RE.sub(sub, value)
+
+
+def render(value, variables, strict=False):
+    """Replace `{{name}}` from `variables` (case params, `vars:`, values saved by earlier steps).
+
+    A string that is exactly one placeholder keeps the variable's type (so `equals: "{{n}}"` stays a number).
+    Unknown names are left in place unless `strict`, so runtime variables survive load-time rendering.
+    """
+    if isinstance(value, dict):
+        return {k: render(v, variables, strict) for k, v in value.items()}
+    if isinstance(value, list):
+        return [render(v, variables, strict) for v in value]
+    if not isinstance(value, str):
+        return value
+    whole = VAR_RE.fullmatch(value.strip())
+    if whole and whole.group(1) in variables:
+        return variables[whole.group(1)]
+
+    def sub(m):
+        if m.group(1) in variables:
+            return str(variables[m.group(1)])
+        if strict:
+            raise ScenarioError(f"undefined variable {{{{{m.group(1)}}}}} (set it in vars/cases or with save)")
+        return m.group(0)
+
+    return VAR_RE.sub(sub, value)
+
+
+def _include(item, base, stack):
+    path = (base / item["include"]).resolve()
+    if path in stack:
+        raise ScenarioError(f"include cycle: {' -> '.join(p.name for p in [*stack, path])}")
+    if not path.is_file():
+        raise ScenarioError(f"include not found: {item['include']} (relative to {base})")
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    steps = data.get("steps") if isinstance(data, dict) else data
+    if not isinstance(steps, list):
+        raise ScenarioError(f"{item['include']}: expected a list of steps or a mapping with steps")
+    steps = render(_resolve(steps, path.parent, [*stack, path]), item.get("with") or {})
+    prefix = item.get("prefix", "")
+    return [
+        {**st, "id": f"{prefix}{st['id']}"} if prefix and isinstance(st, dict) and "id" in st else st for st in steps
+    ]
+
+
+def _resolve(steps, base, stack):
+    out = []
+    for st in steps:
+        if isinstance(st, dict) and "include" in st:
+            out.extend(_include(st, base, stack))
+        else:
+            out.append(st)
+    return out
+
+
+def _cases(sc):
+    if sc.get("cases") is not None and sc.get("matrix") is not None:
+        raise ScenarioError("use either cases or matrix, not both")
+    if sc.get("matrix") is not None:
+        m = sc["matrix"]
+        if not isinstance(m, dict) or not m or not all(isinstance(v, list) and v for v in m.values()):
+            raise ScenarioError("matrix: must map names to non-empty lists")
+        return [dict(zip(m, combo, strict=True)) for combo in itertools.product(*m.values())]
+    cases = sc.get("cases")
+    if cases is None:
+        return None
+    if not isinstance(cases, list) or not cases or not all(isinstance(c, dict) for c in cases):
+        raise ScenarioError("cases: must be a non-empty list of mappings")
+    return cases
+
+
+def expand(sc, base="."):
+    """Resolve `include:` steps, apply `vars:` and repeat the steps once per `cases:`/`matrix:` entry."""
+    if not isinstance(sc, dict) or not isinstance(sc.get("steps"), list):
+        return sc
+    sc = copy.deepcopy(sc)
+    variables = sc.get("vars") or {}
+    if not isinstance(variables, dict):
+        raise ScenarioError("vars: must be a mapping")
+    steps = _resolve(sc["steps"], Path(base), [])
+    cases = _cases(sc)
+    if cases is None:
+        sc["steps"] = render(steps, variables)
+        return sc
+    expanded = []
+    for n, case in enumerate(cases, 1):
+        label = str(case.get("name") or ", ".join(f"{k}={v}" for k, v in case.items()))
+        for st in steps:
+            if not isinstance(st, dict):
+                expanded.append(st)
+                continue
+            if st.get("once") and n > 1:
+                continue
+            st = render(st, {**variables, **case})
+            if not st.get("once"):
+                st = {**st, "id": f"{st.get('id')}-{n}", "title": f"[{label}] {st.get('title', '')}", "case": label}
+            expanded.append(st)
+    sc["steps"] = expanded
+    return sc
 
 
 def env_vars(scenario) -> set[str]:
@@ -97,6 +202,28 @@ def _check_args(kind, arg, where, errors):
         errors.append(f"{where}: {kind} is missing {', '.join(missing)}")
 
 
+def _check_privacy(p, errors):
+    if p is None:
+        return
+    if not isinstance(p, dict):
+        errors.append("privacy: must be a mapping")
+        return
+    for key in p:
+        if key not in PRIVACY_KEYS:
+            errors.append(f"privacy.{key}: unknown (allowed: {', '.join(sorted(PRIVACY_KEYS))})")
+    for key in ("mask", "patterns", "selectors", "keep"):
+        if p.get(key) is not None and not isinstance(p[key], list):
+            errors.append(f"privacy.{key}: must be a list")
+    for rule in p.get("mask") or []:
+        if rule not in PII_RULES:
+            errors.append(f"privacy.mask: unknown rule {rule!r} (allowed: {', '.join(sorted(PII_RULES))})")
+    for pat in p.get("patterns") or []:
+        try:
+            re.compile(str(pat))
+        except re.error as e:
+            errors.append(f"privacy.patterns: invalid pattern {pat!r}: {e}")
+
+
 def validate(sc) -> list[str]:
     """Return a list of human-readable problems; empty means the scenario is runnable."""
     errors = []
@@ -111,6 +238,7 @@ def validate(sc) -> list[str]:
     for key in settings:
         if key not in SETTINGS:
             errors.append(f"settings.{key}: unknown (allowed: {', '.join(sorted(SETTINGS))})")
+    _check_privacy(sc.get("privacy"), errors)
     tabs = sc.get("tabs")
     if not isinstance(tabs, dict) or not tabs:
         errors.append("tabs: at least one tab is required")
@@ -145,6 +273,9 @@ def validate(sc) -> list[str]:
         where = f"steps[{sid or i}]"
         if not st.get("title"):
             errors.append(f"{where}: title is required")
+        sub = st.get("subtitle")
+        if sub is not None and not isinstance(sub, str | dict) or isinstance(sub, dict) and not sub:
+            errors.append(f"{where}: subtitle must be text or a non-empty map of language -> text")
         if st.get("tab") not in tabs:
             errors.append(f"{where}: tab must be one of {sorted(tabs)}")
         if not st.get("expect"):
@@ -166,6 +297,11 @@ def validate(sc) -> list[str]:
                     errors.append(f"{where}.expect[{j}]: database '{db}' is not defined under databases")
                 if "sql" not in arg or "rows" not in arg:
                     errors.append(f"{where}.expect[{j}]: db needs sql and rows")
+        zoom = st.get("zoom")
+        if zoom is not None and not (isinstance(zoom, str) or (isinstance(zoom, dict) and "target" in zoom)):
+            errors.append(f"{where}: zoom needs a selector or a mapping with target")
+        if st.get("layout") not in (None, "split"):
+            errors.append(f"{where}: layout must be split")
         for j, a in enumerate(st.get("annotate", []) or []):
             kind = _single_key(a, f"{where}.annotate[{j}]", ANNOTATIONS, errors)
             if kind and not (isinstance(a[kind], (str, dict)) and (isinstance(a[kind], str) or "target" in a[kind])):
@@ -188,7 +324,7 @@ def load_env_file(path):
 
 
 def load(path) -> dict:
-    sc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    sc = expand(yaml.safe_load(Path(path).read_text(encoding="utf-8")), Path(path).resolve().parent)
     problems = validate(sc)
     if problems:
         raise ScenarioError("invalid scenario:\n  - " + "\n  - ".join(problems))

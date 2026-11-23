@@ -115,7 +115,29 @@ def title_card(tmp, tl, out, seconds, frame):
     )
 
 
-def step_clip(tmp, rec_dir, tl, step, out, lead, frame):
+def zoom_filter(step, seg_size):
+    """Ease into the step's `zoom` target (rect captured by the runner) and hold; '' when not zoomed."""
+    z = step.get("zoom")
+    if not z:
+        return ""
+    sw, sh = seg_size
+    x, y, w, h = z["rect"]
+    vw, vh = z["viewport"]
+    sx, sy = sw / max(vw, 1), sh / max(vh, 1)
+    cx, cy = (x + w / 2) * sx * 2, (y + h / 2) * sy * 2  # upscaled 2x below to keep the pan smooth
+    fit = min(0.85 * sw / max(w * sx, 1), 0.85 * sh / max(h * sy, 1))
+    factor = max(1.0, min(float(z.get("factor", 1.8)), fit))
+    if factor <= 1.01:
+        return ""
+    u = f"clip((on/{FPS}-{z.get('at', 0.4)})/0.6,0,1)"
+    zoom = f"1+{factor - 1:.3f}*{u}*{u}*(3-2*{u})"
+    return (
+        f"scale=iw*2:ih*2,zoompan=z='{zoom}':d=1:fps={FPS}:s={sw}x{sh}:"
+        f"x='clip({cx:.1f}-iw/zoom/2,0,iw-iw/zoom)':y='clip({cy:.1f}-ih/zoom/2,0,ih-ih/zoom)',"
+    )
+
+
+def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
     W, H = frame
     FH = H + TOP + BOTTOM
     seg = rec_dir / step["segment"]
@@ -128,20 +150,81 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame):
     st = text_file(tmp, f"st-{step['id']}.txt", status)
     st_color = "0x16a34a" if status == "PASS" else "0xdc2626"
     bold = "font-bold.ttf"
-    vf = (
+    cut = (
         f"fps={FPS},tpad=stop_mode=clone:stop_duration=10,"
-        f"trim=start={start:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,"
-        f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
+        f"trim=start={start:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,{zoom_filter(step, video_size(seg))}"
+    )
+    chrome = (
         f"pad={W}:{H + TOP}:0:{TOP}:color={color},pad={W}:{FH}:0:0:color=0x0f172a,"
         f"drawtext=fontfile={bold}:textfile={hdr}:fontsize=20:fontcolor=white:x=16:y=10,"
         f"drawbox=x=iw-96:y=6:w=80:h=28:color={st_color}:t=fill,"
         f"drawtext=fontfile={bold}:textfile={st}:fontsize=18:fontcolor=white:x=w-56-text_w/2:y=11"
     )
-    ff("-i", str(seg.resolve()), "-vf", vf, "-an", *encode_args(Path(out).resolve()), cwd=tmp)
+
+    def fit(w, h):
+        return (
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=0x0f172a,setsar=1"
+        )
+
+    if split_image:
+        # Left: the last frame of the step being proven; right: this step (e.g. the DB query).
+        half = W // 2 - W // 2 % 2
+        graph = (
+            f"[1:v]{fit(half, H)}[l];[0:v]{cut}{fit(W - half, H)}[r];"
+            f"[l][r]hstack=inputs=2:shortest=1,drawbox=x={half - 1}:y=0:w=2:h=ih:color=0x0f172a:t=fill,{chrome}"
+        )
+        inputs = ["-i", str(seg.resolve()), "-loop", "1", "-framerate", str(FPS), "-i", str(split_image.resolve())]
+        ff(*inputs, "-filter_complex", graph, "-t", f"{dur:.3f}", "-an", *encode_args(Path(out).resolve()), cwd=tmp)
+    else:
+        ff(
+            "-i",
+            str(seg.resolve()),
+            "-vf",
+            cut + fit(W, H) + "," + chrome,
+            "-an",
+            *encode_args(Path(out).resolve()),
+            cwd=tmp,
+        )
     return dur
 
 
-def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0):
+def chapters_file(tmp, tl, title_seconds):
+    lines = [";FFMETADATA1", f"title={tl['scenario']}", "", "[CHAPTER]", "TIMEBASE=1/1000", "START=0"]
+    lines += [f"END={int(title_seconds * 1000)}", "title=Title", ""]
+    for s in tl["steps"]:
+        lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(s['final_start'] * 1000)}"]
+        lines += [f"END={int(s['final_end'] * 1000)}", f"title={s['id']} {s['title']} ({s['status'].upper()})", ""]
+    return text_file(tmp, "chapters.txt", "\n".join(lines))
+
+
+def split_source(rec_dir, tl, i, step):
+    """Screenshot shown beside a `layout: split` step: `split_with` step, else the previous step."""
+    if step.get("layout") != "split":
+        return None
+    ref = step.get("split_with") or (tl["steps"][i - 2]["id"] if i > 1 else None)
+    src = next((s for s in tl["steps"] if s["id"] == ref), None)
+    path = rec_dir / src["screenshot"] if src and src.get("screenshot") else None
+    return path if path and path.is_file() else None
+
+
+def subtitle_languages(tl, lang=None):
+    """Languages found in per-step `subtitle: {en: ..., vi: ...}` maps; the burned one first."""
+    langs = list(dict.fromkeys(k for s in tl["steps"] if isinstance(s.get("subtitle"), dict) for k in s["subtitle"]))
+    burn = lang or tl.get("lang") or (langs[0] if langs else None)
+    if lang and langs and lang not in langs:
+        raise ValueError(f"no subtitles in {lang!r}; scenario has {', '.join(langs)}")
+    return [burn, *[x for x in langs if x != burn]] if burn else []
+
+
+def pick_subtitle(step, lang):
+    sub = step.get("subtitle", step["title"])
+    if not isinstance(sub, dict):
+        return str(sub)
+    return str(sub.get(lang) or next(iter(sub.values()), step["title"]))
+
+
+def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None):
     """Build final.mp4 (+ subtitles.srt, report.md/html/xlsx, timeline.final.json, manifest.sha256)."""
     if not ffmpeg_bin():
         raise RuntimeError("ffmpeg not found; run `tirai setup` or set FFMPEG_BIN")
@@ -161,22 +244,32 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0):
         shutil.copyfile(fonts[0], tmpd / "font.ttf")
         shutil.copyfile(fonts[1], tmpd / "font-bold.ttf")
         size = frame_size(tl, rec_dir)
-        clips, srt, t = [], [], 0.0
+        langs = subtitle_languages(tl, lang) or [None]
+        clips, srt, t = [], {x: [] for x in langs}, 0.0
         title = tmpd / "00-title.mp4"
         title_card(tmp, tl, title, title_seconds, size)
         clips.append(title)
         t += title_seconds
         for i, step in enumerate(tl["steps"], 1):
             clip = tmpd / f"{i:02d}-{step['id']}.mp4"
-            dur = step_clip(tmp, rec_dir, tl, step, clip, lead, size)
+            dur = step_clip(tmp, rec_dir, tl, step, clip, lead, size, split_source(rec_dir, tl, i, step))
             clips.append(clip)
-            srt.append(f"{len(srt) + 1}\n{ts(t + 0.2)} --> {ts(t + dur - 0.1)}\n{step['subtitle']}\n")
+            for x, cues in srt.items():
+                cues.append(f"{len(cues) + 1}\n{ts(t + 0.2)} --> {ts(t + dur - 0.1)}\n{pick_subtitle(step, x)}\n")
+            if isinstance(step.get("subtitle"), dict):
+                step["subtitles"] = step["subtitle"]
+            step["subtitle"] = pick_subtitle(step, langs[0])
             step["final_start"], step["final_end"] = round(t, 3), round(t + dur, 3)
             t += dur
         (tmpd / "list.txt").write_text("".join(f"file '{c.name}'\n" for c in clips))
         ff("-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "joined.mp4", cwd=tmp)
-        srt_text = "\n".join(srt)
+        srt_text = "\n".join(srt[langs[0]])
         (rec_dir / "subtitles.srt").write_text(srt_text, encoding="utf-8")
+        for x, cues in srt.items():
+            if x and len(srt) > 1:
+                (rec_dir / f"subtitles.{x}.srt").write_text("\n".join(cues), encoding="utf-8")
+        if langs[0]:
+            tl["lang"] = langs[0]
         (tmpd / "subs.srt").write_text(srt_text, encoding="utf-8")
         # libass scales SRT styles from a 288px-high canvas: FontSize 10 ~ 28px, MarginV 6 ~ 17px at 808px.
         font_name = subtitle_font_name()
@@ -184,9 +277,16 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0):
             f"FontName={font_name},FontSize=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
             "BorderStyle=1,Outline=0.6,Shadow=0,MarginV=6,Alignment=2"
         )
+        chapters = chapters_file(tmp, tl, title_seconds)
         ff(
             "-i",
             "joined.mp4",
+            "-i",
+            chapters,
+            "-map",
+            "0:v",
+            "-map_chapters",
+            "1",
             "-vf",
             f"subtitles=subs.srt:fontsdir=.:force_style='{style}'",
             *encode_args(final),

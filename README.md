@@ -188,8 +188,8 @@ Full vocabulary: [scenario format](docs/scenario-format.md) · [annotations](doc
 
 ```text
 evidence/record/
-├── final.mp4             title card + every step, header bar with PASS/FAIL, burned-in subtitles
-├── subtitles.srt         one cue per step, aligned to the final video
+├── final.mp4             title card + every step (chapters), PASS/FAIL header, burned-in subtitles
+├── subtitles.srt         one cue per step, aligned to the final video (+ subtitles.<lang>.srt)
 ├── report.md             step table: tab, title, status, video time, checks
 ├── report.html           self-contained: video player, click a step to jump, embedded screenshots
 ├── report.xlsx           evidence sheet: expected / actual / status / screenshot per step
@@ -223,6 +223,8 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 | `tirai record <file>` | Dry-run, record and compose in one go (`--record-failures`: keep going and record bug evidence) |
 | `tirai verify [dir]` | Check an evidence folder against its `manifest.sha256` |
 | `tirai compose <timeline.json>` | Rebuild the video and report from a recorded timeline |
+| `tirai capture <url>` | Click a flow once in the browser; get a scenario (`from-trace` converts an existing trace) |
+| `tirai mcp` | Run the MCP server (validate, dry_run, record, compose, verify, from_trace) |
 | `tirai install-skill` | Install the skill for an agent or into any directory |
 
 ## Security
@@ -230,6 +232,7 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 - **Secrets** are referenced as `${ENV_VAR}` (shell or a git-ignored `.env`) and never written to timelines, reports or video metadata.
 - **Database access is read-only**: use a read-only user for both DBX and `expect: db`.
 - **Blur is instant**: masks render before the next frame, so sensitive values never appear in the recording.
+- **Automatic PII masking** (`privacy:`): emails, phones, cards, tokens and custom patterns are covered on every page.
 - **Browser profile**: BrowserSkill drives a real browser; use a dedicated profile or Agent Window.
 
 Report vulnerabilities via [SECURITY.md](SECURITY.md).

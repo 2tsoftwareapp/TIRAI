@@ -11,8 +11,11 @@
  *   text(target, label, opts)    floating label next to target (or at {x,y})
  *   badge(target, n, opts)       numbered step marker
  *   highlight(target, opts)      translucent marker fill
- *   blur(target, opts)           pixelate/blur sensitive content
- *   clear(id?)                   remove one annotation or all
+ *   blur(target, opts)           pixelate/blur sensitive content (opts.solid: opaque cover)
+ *   clear(id?)                   remove one annotation or all (auto masks stay)
+ *   mask({mask, patterns, selectors, keep, inputs})  auto-blur PII and keep it blurred as the DOM changes
+ *                                mask: built-in rules (email, phone, card, token); patterns: extra regex sources;
+ *                                selectors: always-blurred elements; keep: exact strings left visible
  * target: CSS selector | Element | {x, y, w?, h?} (viewport px) | {text, within?, exact?, nth?} | {selector, rel:{x,y,w,h}}
  *         | {grid:{column?, toColumn?, row, rows?, rowHeight?, header?, body?}} (canvas data grids)
  *   config({anim, duration})     global defaults; returns current config
@@ -22,8 +25,9 @@
  * Every call returns the annotation id. Missing targets throw.
  */
 (() => {
-  if (window.__ann && window.__ann.version) return window.__ann.version;
-  const VERSION = '0.2.0';
+  const VERSION = '0.3.0';
+  if (window.__ann && window.__ann.version === VERSION) return VERSION;
+  document.getElementById('__ann_host')?.remove();
   const CFG = { anim: 'draw', duration: 420, ease: 'cubic-bezier(.22,.8,.24,1)' };
   const NS = 'http://www.w3.org/2000/svg';
   const host = document.createElement('div');
@@ -37,7 +41,8 @@
          box-shadow:0 2px 8px #0005;white-space:pre-wrap;max-width:360px}
     .badge{position:fixed;width:30px;height:30px;border-radius:50%;color:#fff;font:700 16px/30px system-ui,sans-serif;
            text-align:center;box-shadow:0 2px 6px #0006;border:2px solid #fff}
-    .blur{position:fixed;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:#ffffff33;border-radius:4px}
+    .blur{position:fixed;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);background:#cbd5e1b3;border-radius:4px}
+    .blur.solid{background:#cbd5e1}
     .sh{filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.35))}
   </style><svg></svg>`;
   const svg = root.querySelector('svg');
@@ -50,6 +55,7 @@
   const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   const pick = (sel) => [...document.querySelectorAll(sel)].find(visible) || null;
   const resolveTarget = (t) => {
+    if (typeof t === 'function') return t;
     if (t instanceof Element) return () => t.getBoundingClientRect();
     if (typeof t === 'string') {
       const el = pick(t);
@@ -241,7 +247,7 @@
   }
   function blur(target, o) {
     return add('blur', target, { padding: 2, ...o }, (item, b) => {
-      if (!item.div) { item.div = document.createElement('div'); item.div.className = 'blur'; root.appendChild(item.div); }
+      if (!item.div) { item.div = document.createElement('div'); item.div.className = o.solid ? 'blur solid' : 'blur'; root.appendChild(item.div); }
       Object.assign(item.div.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
     });
   }
@@ -253,7 +259,7 @@
       nodes.forEach((n) => { n.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: 'ease-in', fill: 'forwards' }).onfinish = () => n.remove(); });
     };
     if (id) { const it = items.get(id); if (it) drop(it); return; }
-    [...items.values()].forEach(drop);
+    [...items.values()].filter((it) => !it.id.startsWith('mask-')).forEach(drop);
   }
   function list() { return [...items.keys()]; }
   function config(o) { Object.assign(CFG, o || {}); return { ...CFG }; }
@@ -265,6 +271,62 @@
   addEventListener('resize', schedule);
   setInterval(schedule, 250);
 
-  window.__ann = { version: VERSION, config, box, circle, arrow, text, badge, highlight, blur, clear, list };
+  const PII = {
+    email: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}',
+    phone: '\\+?\\d[\\d ().-]{7,}\\d',
+    card: '\\b(?:\\d[ -]?){12,18}\\d\\b',
+    token: '\\b(?:eyJ[\\w-]{8,}\\.[\\w-]{8,}\\.[\\w-]+|(?:sk|pk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{10,})\\b',
+  };
+  const MASK = { re: null, selectors: [], keep: new Set(), inputs: true, done: new Map(), obs: null, raf: 0, seq: 0 };
+  const nodeIds = new WeakMap();
+  let nodeSeq = 0;
+  const nid = (n) => { if (!nodeIds.has(n)) nodeIds.set(n, ++nodeSeq); return nodeIds.get(n); };
+  const hits = (text) => (MASK.re ? [...text.matchAll(MASK.re)].filter((m) => m[0].trim() && !MASK.keep.has(m[0])) : []);
+  function scanMask() {
+    MASK.raf = 0;
+    if (!document.body) return 0;
+    mount();
+    const want = new Map();
+    MASK.selectors.forEach((sel) => document.querySelectorAll(sel).forEach((e) => want.set(`s${nid(e)}`, () => e.getBoundingClientRect())));
+    if (MASK.re) {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const p = n.parentElement;
+        if (!p || /^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA)$/.test(p.tagName) || p.closest('#__ann_host')) continue;
+        for (const m of hits(n.data)) {
+          const r = document.createRange();
+          r.setStart(n, m.index); r.setEnd(n, m.index + m[0].length);
+          want.set(`t${nid(n)}:${m.index}:${m[0].length}`, () => r.getBoundingClientRect());
+        }
+      }
+      if (MASK.inputs) {
+        document.querySelectorAll('input:not([type=password]):not([type=hidden]),textarea').forEach((e) => {
+          if (hits(e.value || '').length) want.set(`i${nid(e)}`, () => e.getBoundingClientRect());
+        });
+      }
+    }
+    want.forEach((rect, key) => { if (!MASK.done.has(key)) MASK.done.set(key, blur(rect, { id: `mask-${++MASK.seq}`, padding: 3, solid: true })); });
+    MASK.done.forEach((id, key) => { if (!want.has(key)) { clear(id); MASK.done.delete(key); } });
+    return MASK.done.size;
+  }
+  const scheduleMask = () => { if (!MASK.raf) MASK.raf = requestAnimationFrame(scanMask); };
+  function mask(o = {}) {
+    const rules = (o.mask || []).map((k) => { if (!PII[k]) throw new Error(`mask: unknown rule ${k}`); return PII[k]; });
+    const src = [...rules, ...(o.patterns || [])];
+    MASK.re = src.length ? new RegExp(src.map((x) => `(?:${x})`).join('|'), 'g') : null;
+    MASK.selectors = o.selectors || [];
+    MASK.keep = new Set(o.keep || []);
+    MASK.inputs = o.inputs !== false;
+    if (!MASK.obs) {
+      MASK.obs = new MutationObserver((ms) => { if (ms.some((m) => m.target !== host && !host.contains(m.target) && ![...m.addedNodes].every((x) => x === host))) scheduleMask(); });
+      MASK.obs.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
+      addEventListener('input', scheduleMask, true);
+    }
+    MASK.done.forEach((id) => clear(id));
+    MASK.done.clear();
+    return scanMask();
+  }
+
+  window.__ann = { version: VERSION, config, box, circle, arrow, text, badge, highlight, blur, clear, list, mask };
   return VERSION;
 })();

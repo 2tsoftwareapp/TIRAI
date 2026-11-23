@@ -78,7 +78,9 @@ def cmd_run(args):
 def cmd_compose(args):
     from tirai import compose
 
-    final, seconds = compose.compose(args.timeline, out=args.output, lead=args.lead, title_seconds=args.title_seconds)
+    final, seconds = compose.compose(
+        args.timeline, out=args.output, lead=args.lead, title_seconds=args.title_seconds, lang=args.lang
+    )
     print(f"final video: {final} ({seconds:.1f}s)")
     return 0
 
@@ -107,6 +109,45 @@ def cmd_verify(args):
         print(p)
     print("evidence intact" if not problems else f"{len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+def cmd_from_trace(args):
+    from tirai.trace import from_trace
+
+    scenario, env, skipped = from_trace(args.trace, args.output, do_resolve=not args.no_resolve, scope=args.scope)
+    print(f"wrote {args.output} ({len(scenario['steps'])} steps)")
+    for msg in skipped:
+        print(f"skipped {msg}")
+    if env:
+        print("set in .env before running: " + ", ".join(env))
+    print(f"review titles/expectations, then: tirai run {args.output} --dry-run")
+    return 0
+
+
+def cmd_capture(args):
+    from tirai.system import bsk_bin, run_text
+
+    if not bsk_bin():
+        print("BrowserSkill CLI (bsk) not found; run `tirai setup`")
+        return 1
+    trace_dir = Path(args.trace_dir)
+    cmd = [bsk_bin(), "record", "start", "--url", args.url, "--output", str(trace_dir)]
+    if args.purpose:
+        cmd += ["--purpose", args.purpose]
+    print("recording: do the flow in the Agent Window, then click finish (结束) in the browser")
+    p = run_text(cmd, timeout=None)
+    if p.returncode != 0 or not (trace_dir / "trace.json").is_file():
+        print(p.stderr.strip() or p.stdout.strip() or "bsk record produced no trace")
+        return 1
+    args.trace = str(trace_dir)
+    return cmd_from_trace(args)
+
+
+def cmd_mcp(_args):
+    from tirai.mcp import serve
+
+    serve()
+    return 0
 
 
 def cmd_init(args):
@@ -181,6 +222,7 @@ def build_parser():
         s.add_argument("--output", help="final video path (default: <timeline dir>/final.mp4)")
         s.add_argument("--lead", type=float, default=0.3, help="seconds kept before each step starts")
         s.add_argument("--title-seconds", type=float, default=3.0)
+        s.add_argument("--lang", help="subtitle language to burn in (from per-step subtitle maps)")
 
     s = sub.add_parser("run", help="run a scenario (--dry-run or --record)")
     run_opts(s)
@@ -214,6 +256,24 @@ def build_parser():
     s.add_argument("dir", nargs="?", default="evidence/record")
     s.set_defaults(fn=cmd_verify)
 
+    def trace_opts(s):
+        s.add_argument("-o", "--output", default="scenario.yaml", help="scenario file to write")
+        s.add_argument("--no-resolve", action="store_true", help="skip the replay that resolves CSS selectors")
+        s.add_argument("--scope", default="tirai-trace", help="bsk scope for the resolving replay")
+
+    s = sub.add_parser("from-trace", help="convert a `bsk record` trace into a scenario")
+    s.add_argument("trace", help="trace.json or the folder that holds it")
+    trace_opts(s)
+    s.set_defaults(fn=cmd_from_trace)
+
+    s = sub.add_parser("capture", help="record a flow you click through once (bsk record) and turn it into a scenario")
+    s.add_argument("url")
+    s.add_argument("--purpose", help="what the flow proves; becomes the scenario name")
+    s.add_argument("--trace-dir", default="trace", help="where bsk writes trace.json (default: trace/)")
+    trace_opts(s)
+    s.set_defaults(fn=cmd_capture)
+
+    sub.add_parser("mcp", help="run the TIRAI MCP server on stdio (for MCP-capable agents)").set_defaults(fn=cmd_mcp)
     sub.add_parser("annotate-js", help="print the path of the injectable annotate.js").set_defaults(fn=cmd_asset)
     return p
 
