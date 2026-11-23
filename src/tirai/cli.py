@@ -123,6 +123,31 @@ def cmd_record(args):
     return cmd_compose(args) or failed
 
 
+def cmd_export(args):
+    import json
+
+    from tirai import export, report
+
+    rec = Path(args.dir)
+    tl_path = rec / "timeline.final.json" if (rec / "timeline.final.json").is_file() else rec / "timeline.json"
+    if not tl_path.is_file():
+        print(f"no timeline in {rec}; run `tirai record` first")
+        return 1
+    tl = json.loads(tl_path.read_text(encoding="utf-8"))
+    formats = [f for item in args.format for f in item.split(",") if f] or list(export.FORMATS)
+    unknown = set(formats) - set(export.FORMATS)
+    if unknown:
+        print(f"unknown format(s): {', '.join(sorted(unknown))} (use {', '.join(export.FORMATS)})")
+        return 2
+    for path in export.write(
+        rec, tl, formats, test_key=args.test_key, project_key=args.project_key, case_id=args.case_id
+    ):
+        print(f"wrote {path}")
+    if (rec / report.MANIFEST).is_file():
+        report.write_manifest(rec)
+    return 0
+
+
 def cmd_verify(args):
     from tirai import report
 
@@ -375,6 +400,14 @@ def build_parser():
     s.add_argument("--dest", help="explicit skills directory (overrides --agent paths)")
     s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_install_skill)
+
+    s = sub.add_parser("export", help="write junit.xml, xray.json, testrail.csv from an evidence folder (no upload)")
+    s.add_argument("dir", nargs="?", default="evidence/record")
+    s.add_argument("--format", "-f", action="extend", nargs="+", default=[], help="junit, xray, testrail (default all)")
+    s.add_argument("--test-key", help="Xray: existing Jira test issue key (else a new Manual test is described)")
+    s.add_argument("--project-key", help="Xray: Jira project key for a new test")
+    s.add_argument("--case-id", help="TestRail: case id (e.g. C123) for every row")
+    s.set_defaults(fn=cmd_export)
 
     s = sub.add_parser("verify", help="check an evidence folder against its manifest.sha256")
     s.add_argument("dir", nargs="?", default="evidence/record")

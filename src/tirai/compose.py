@@ -11,7 +11,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from tirai import report
+from tirai import export, report
 from tirai.system import ffmpeg_bin, ffprobe_bin, find_font, run_text, subtitle_font_name
 
 FPS = 30
@@ -303,6 +303,7 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None):
     (rec_dir / "timeline.final.json").write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")
     report.write_html(rec_dir, tl, final.name)
     report.write_xlsx(rec_dir, tl, final.name)
+    export.write(rec_dir, tl, ("junit",), video=final.name)
     report.write_manifest(rec_dir)
     return final, t
 
