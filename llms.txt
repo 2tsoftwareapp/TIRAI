@@ -21,8 +21,10 @@ Key facts for agents:
 
 - Install: macOS/Linux `curl -fsSL https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.sh | sh -s -- --yes`;
   Windows `$env:TIRAI_SETUP_ARGS="--yes"; irm https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.ps1 | iex`.
-  Requires Python 3.10+. The installer creates `~/.tirai/venv`, links `tirai` into `~/.local/bin` and runs
-  `tirai setup` (ffmpeg via the OS package manager, BrowserSkill CLI via its official installer, agent skills).
+  No Python prerequisite: the installer downloads the prebuilt `tirai-<os>-<arch>` binary from GitHub Releases
+  when one exists, otherwise builds from source with Python >= 3.10, or with uv + a private Python 3.12 in `~/.tirai`
+  when the machine has no suitable Python (`--binary` / `--source` force a method). It links `tirai` into
+  `~/.local/bin` and runs `tirai setup` (ffmpeg via the OS package manager, BrowserSkill CLI via its official installer, agent skills).
 - The BrowserSkill browser extension must be installed by the human from the Chrome Web Store / Edge Add-ons.
   Never automate it. Never run `sudo` without asking; if a package install needs a password, ask the user.
 - Verify with `tirai doctor`: every required check must be `ok` before running scenarios.

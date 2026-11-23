@@ -57,6 +57,7 @@ jobs:
         if: runner.os != 'Windows'
         env:
           TIRAI_SOURCE: ${{ github.workspace }}
+          TIRAI_INSTALL_MODE: source
         run: |
           sh install.sh --yes --skip ffmpeg,browserskill --agent claude --agent codex --agent antigravity
           ~/.local/bin/tirai --version
@@ -69,6 +70,7 @@ jobs:
         shell: pwsh
         env:
           TIRAI_SOURCE: ${{ github.workspace }}
+          TIRAI_INSTALL_MODE: source
         run: |
           ./install.ps1 --yes --skip ffmpeg,browserskill --agent claude --agent codex --agent antigravity
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
