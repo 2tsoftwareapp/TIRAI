@@ -117,6 +117,8 @@ def apply(sc):
         t: {**cfg, "setup": _walk(cfg.get("setup") or [], names, used, missing)} if isinstance(cfg, dict) else cfg
         for t, cfg in (sc.get("tabs") or {}).items()
     }
+    if isinstance(sc.get("cleanup"), list):
+        out["cleanup"] = [_walk(st, names, used, missing) for st in sc["cleanup"]]
     if isinstance(sc.get("privacy"), dict):
         out["privacy"] = _walk(sc["privacy"], names, used, missing)
     out["_targets"] = {k: v for k, v in names.items() if isinstance(k, str)}

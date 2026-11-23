@@ -10,7 +10,7 @@ import yaml
 
 ACTIONS = {
     "navigate", "fill", "click", "press", "wait", "wait_for", "sql", "dbx_login",
-    "select", "hover", "scroll", "upload", "dialog", "save", "eval",
+    "select", "hover", "scroll", "upload", "dialog", "save", "eval", "expect",
 }  # fmt: skip
 EXPECTS = {
     "visible", "not_visible", "text_contains", "text_matches", "url_contains",
@@ -30,7 +30,22 @@ REQUIRED = {
     "save": ("name", "selector"),
 }
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
-SETTINGS = {"hold", "timing_scale", "expect_timeout", "camera", "camera_factor", "fast_forward"}
+SETTINGS = {
+    "hold", "timing_scale", "expect_timeout", "camera", "camera_factor", "fast_forward",
+    "viewport", "auto_scroll", "strict_network", "ignore_requests", "trim_still",
+}  # fmt: skip
+DB_KEYS = {"database", "sql", "rows", "columns", "save"}
+STEP_KEYS = {
+    "id", "tab", "title", "subtitle", "actions", "expect", "annotate", "hold", "zoom", "layout", "split_with",
+    "once", "case", "save", "writes", "for_each", "as",
+}  # fmt: skip
+# Playwright-only selector syntax: agent-browser/bsk take CSS, so these never match.
+PLAYWRIGHT_RE = re.compile(
+    r":has-text\(|:text-is\(|:text\(|:text-matches\(|:nth-match\(|:visible\b|>>|^internal:|^xpath="
+)
+WRITE_SQL_RE = re.compile(
+    r"^\s*(insert|update|delete|merge|upsert|replace|create|alter|drop|truncate|grant|revoke|call|exec)\b", re.I | re.M
+)
 PII_RULES = {"email", "phone", "card", "token"}
 PRIVACY_KEYS = {"mask", "patterns", "selectors", "keep", "inputs", "ocr"}
 OCR_MODES = {"off", "warn", "fix", "fail"}
@@ -83,13 +98,32 @@ def render(value, variables, strict=False):
     return VAR_RE.sub(sub, value)
 
 
+def read_yaml(path):
+    """Parse a YAML file; syntax errors become a ScenarioError with the line and a hint, not a traceback."""
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        where = f"{path}:{mark.line + 1}:{mark.column + 1}" if mark else str(path)
+        problem = getattr(e, "problem", None) or str(e).splitlines()[0]
+        msg = f"{where}: YAML syntax error: {problem}"
+        line = text.splitlines()[mark.line] if mark and mark.line < len(text.splitlines()) else ""
+        if mark and line.strip():
+            msg += f"\n    {line.strip()}"
+        if re.search(r"[:,\[{]\s*(\$\{|\{\{)", line):
+            msg += '\n  hint: quote values that start with ${...} or {{...}}, e.g. value: "${APP_USER}"'
+        raise ScenarioError(msg) from None
+
+
 def _include(item, base, stack):
     path = (base / item["include"]).resolve()
     if path in stack:
         raise ScenarioError(f"include cycle: {' -> '.join(p.name for p in [*stack, path])}")
     if not path.is_file():
         raise ScenarioError(f"include not found: {item['include']} (relative to {base})")
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data = read_yaml(path)
     steps = data.get("steps") if isinstance(data, dict) else data
     if not isinstance(steps, list):
         raise ScenarioError(f"{item['include']}: expected a list of steps or a mapping with steps")
@@ -126,6 +160,29 @@ def _cases(sc):
     return cases
 
 
+def _repeat(st, variables):
+    """`for_each:` -> one step per item (`{{field}}` per mapping item, `{{item}}`/`{{<as>}}` for scalars)."""
+    if not isinstance(st, dict) or st.get("for_each") is None:
+        return [render(st, variables)]
+    items = st["for_each"]
+    if isinstance(items, str):
+        name = VAR_RE.fullmatch(items.strip())
+        name = name.group(1) if name else items.strip()
+        if name not in variables:
+            raise ScenarioError(f"steps[{st.get('id')}].for_each: {items!r} is not a list in vars/cases")
+        items = variables[name]
+    if not isinstance(items, list) or not items:
+        raise ScenarioError(f"steps[{st.get('id')}].for_each: must be a non-empty list (or the name of one)")
+    base = {k: v for k, v in st.items() if k not in ("for_each", "as")}
+    out = []
+    for i, item in enumerate(items, 1):
+        local = dict(item) if isinstance(item, dict) else {st.get("as") or "item": item}
+        step = render(base, {**variables, **local, "index": i})
+        step["id"] = f"{step.get('id')}-{i}"
+        out.append(step)
+    return out
+
+
 def expand(sc, base="."):
     """Resolve `include:` steps, apply `vars:` and repeat the steps once per `cases:`/`matrix:` entry."""
     if not isinstance(sc, dict) or not isinstance(sc.get("steps"), list):
@@ -137,7 +194,7 @@ def expand(sc, base="."):
     steps = _resolve(sc["steps"], Path(base), [])
     cases = _cases(sc)
     if cases is None:
-        sc["steps"] = render(steps, variables)
+        sc["steps"] = [x for st in steps for x in _repeat(st, variables)]
         return sc
     expanded = []
     for n, case in enumerate(cases, 1):
@@ -146,12 +203,13 @@ def expand(sc, base="."):
             if not isinstance(st, dict):
                 expanded.append(st)
                 continue
-            if st.get("once") and n > 1:
+            once = st.get("once")
+            if once == "last" and n < len(cases) or once and once != "last" and n > 1:
                 continue
-            st = render(st, {**variables, **case})
-            if not st.get("once"):
-                st = {**st, "id": f"{st.get('id')}-{n}", "title": f"[{label}] {st.get('title', '')}", "case": label}
-            expanded.append(st)
+            for x in _repeat(st, {**variables, **case}):
+                if not once:
+                    x = {**x, "id": f"{x.get('id')}-{n}", "title": f"[{label}] {x.get('title', '')}", "case": label}
+                expanded.append(x)
     sc["steps"] = expanded
     return sc
 
@@ -185,16 +243,53 @@ def _single_key(item, where, allowed, errors):
     return kind
 
 
+def js_regex_problem(pattern):
+    """Best-effort check of a JavaScript RegExp source with Python `re` (JS-only forms translated first)."""
+    if not isinstance(pattern, str):
+        return "must be a string"
+    py = pattern.replace("[^]", "[\\s\\S]")
+    py = re.sub(r"\(\?<(?![=!])", "(?P<", py)
+    py = re.sub(r"\\k<(\w+)>", r"(?P=\1)", py)
+    try:
+        re.compile(py)
+    except re.error as e:
+        return str(e)
+    return None
+
+
 def _check_args(kind, arg, where, errors):
     if kind == "dialog" and arg not in ("accept", "dismiss"):
         errors.append(f"{where}: dialog must be accept or dismiss")
-    if kind == "text_matches" and isinstance(arg, dict) and "pattern" in arg:
-        try:
-            re.compile(arg["pattern"])
-        except re.error as e:
-            errors.append(f"{where}: invalid pattern ({e})")
+    if kind in ("text_matches", "save") and isinstance(arg, dict) and "pattern" in arg:
+        problem = js_regex_problem(arg["pattern"])
+        if problem:
+            errors.append(f"{where}: invalid pattern ({problem}; JavaScript RegExp syntax)")
+    if kind == "db" and isinstance(arg, dict):
+        unknown = set(arg) - DB_KEYS
+        if unknown:
+            allowed = ", ".join(sorted(DB_KEYS))
+            errors.append(f"{where}: db has unknown {', '.join(sorted(unknown))} (allowed: {allowed})")
+        if arg.get("save") is not None and not isinstance(arg["save"], dict):
+            errors.append(f"{where}: db save must map variable -> column")
+    if kind == "expect":
+        items = arg if isinstance(arg, list) else [arg]
+        for j, e in enumerate(items):
+            sub = _single_key(e, f"{where}.expect[{j}]", EXPECTS, errors)
+            if sub:
+                _check_args(sub, e[sub], f"{where}.expect[{j}]", errors)
+        return
+    if kind == "wait_for" and isinstance(arg, dict):
+        if not (arg.get("selector") or arg.get("idle")):
+            errors.append(f"{where}: wait_for needs a selector or idle: true")
     need = REQUIRED.get(kind)
     if not need:
+        if kind == "save" and isinstance(arg, list):
+            for x in arg:
+                _check_args("save", x, where, errors)
+        return
+    if kind == "save" and isinstance(arg, list):
+        for x in arg:
+            _check_args("save", x, where, errors)
         return
     if not isinstance(arg, dict):
         errors.append(f"{where}: {kind} needs a mapping with {', '.join(need)}")
@@ -202,6 +297,70 @@ def _check_args(kind, arg, where, errors):
     missing = [k for k in need if k not in arg]
     if missing:
         errors.append(f"{where}: {kind} is missing {', '.join(missing)}")
+
+
+def _selectors(node, key=None):
+    """Selector strings in an action/expectation (same positions `targets:` substitution uses)."""
+    from tirai.targets import SELECTOR_ACTIONS, SELECTOR_KEYS
+
+    if isinstance(node, str):
+        return [node] if key in SELECTOR_KEYS or key in SELECTOR_ACTIONS or key == "fill" else []
+    if isinstance(node, list):
+        return [x for v in node for x in _selectors(v, key)]
+    if isinstance(node, dict):
+        return [x for k, v in node.items() for x in _selectors(v, k)]
+    return []
+
+
+def selector_problems(item, where):
+    """Playwright-only syntax never matches (drivers take CSS): fail at validate time, not as 'not found'."""
+    out = []
+    for sel in _selectors(item):
+        if PLAYWRIGHT_RE.search(sel):
+            out.append(
+                f"{where}: {sel!r} uses Playwright-only selector syntax; drivers take CSS. Use a locator instead "
+                '(text=…, text*=…, role=button[name="…"], label=…, testid=…), optionally under targets: with '
+                "within:, or native CSS :has()"
+            )
+    return out
+
+
+def sql_writes(sql):
+    """True when SQL text contains a data/schema-changing statement."""
+    return bool(WRITE_SQL_RE.search(re.sub(r"--[^\n]*|/\*.*?\*/", "", str(sql), flags=re.S)))
+
+
+def step_writes(st):
+    """Why a step changes data (`writes:` text, or the write SQL it runs), else None."""
+    w = st.get("writes")
+    if w:
+        return w if isinstance(w, str) else "writes data"
+    for a in st.get("actions") or []:
+        if isinstance(a, dict) and isinstance(a.get("sql"), str) and sql_writes(a["sql"]):
+            return f"sql: {' '.join(a['sql'].split())[:60]}"
+    return None
+
+
+def _check_step_body(st, where, tabs, errors, need_expect=True):
+    inline = any(isinstance(a, dict) and "expect" in a for a in st.get("actions") or [])
+    if need_expect and not st.get("expect") and not inline:
+        errors.append(f"{where}: expect is required (every step must state what it proves)")
+    for j, a in enumerate(st.get("actions", []) or []):
+        kind = _single_key(a, f"{where}.actions[{j}]", ACTIONS, errors)
+        if kind:
+            _check_args(kind, a[kind], f"{where}.actions[{j}]", errors)
+            errors += selector_problems(a, f"{where}.actions[{j}]")
+        if kind == "sql" and tabs.get(st.get("tab"), {}).get("kind") != "dbx":
+            errors.append(f"{where}.actions[{j}]: sql requires a tab with kind: dbx")
+    if st.get("save") is not None:
+        saves = st["save"] if isinstance(st["save"], list) else [st["save"]]
+        for x in saves:
+            _check_args("save", x, f"{where}.save", errors)
+    for j, e in enumerate(st.get("expect", []) or []):
+        kind = _single_key(e, f"{where}.expect[{j}]", EXPECTS, errors)
+        if kind:
+            _check_args(kind, e[kind], f"{where}.expect[{j}]", errors)
+            errors += selector_problems(e, f"{where}.expect[{j}]")
 
 
 def _check_privacy(p, errors):
@@ -244,6 +403,13 @@ def validate(sc) -> list[str]:
     for key in settings:
         if key not in SETTINGS:
             errors.append(f"settings.{key}: unknown (allowed: {', '.join(sorted(SETTINGS))})")
+    vp = settings.get("viewport")
+    if vp is not None and not (
+        isinstance(vp, dict) and all(isinstance(vp.get(k), int) and vp[k] > 0 for k in ("width", "height"))
+    ):
+        errors.append("settings.viewport: needs integer width and height")
+    if settings.get("ignore_requests") is not None and not isinstance(settings["ignore_requests"], list):
+        errors.append("settings.ignore_requests: must be a list of URL substrings")
     _check_privacy(sc.get("privacy"), errors)
     from tirai import targets as tg
 
@@ -256,8 +422,12 @@ def validate(sc) -> list[str]:
         errors.append("tabs: at least one tab is required")
         tabs = {}
     for name, cfg in tabs.items():
+        if isinstance(cfg, dict) and cfg.get("popup"):
+            if cfg.get("app") or cfg.get("setup"):
+                errors.append(f"tabs.{name}: a popup tab is adopted from the browser; no app/setup")
+            continue
         if not isinstance(cfg, dict) or not (cfg.get("url") or cfg.get("app")):
-            errors.append(f"tabs.{name}: url (web page) or app (desktop app) is required")
+            errors.append(f"tabs.{name}: url (web page), app (desktop app) or popup: true is required")
             continue
         for key in cfg.get("dbx") or {}:
             if key not in DBX_KEYS:
@@ -301,18 +471,15 @@ def validate(sc) -> list[str]:
             errors.append(f"{where}: subtitle must be text or a non-empty map of language -> text")
         if st.get("tab") not in tabs:
             errors.append(f"{where}: tab must be one of {sorted(tabs)}")
-        if not st.get("expect"):
-            errors.append(f"{where}: expect is required (every step must state what it proves)")
-        for j, a in enumerate(st.get("actions", []) or []):
-            kind = _single_key(a, f"{where}.actions[{j}]", ACTIONS, errors)
-            if kind:
-                _check_args(kind, a[kind], f"{where}.actions[{j}]", errors)
-            if kind == "sql" and tabs.get(st.get("tab"), {}).get("kind") != "dbx":
-                errors.append(f"{where}.actions[{j}]: sql requires a tab with kind: dbx")
-        for j, e in enumerate(st.get("expect", []) or []):
-            kind = _single_key(e, f"{where}.expect[{j}]", EXPECTS, errors)
-            if kind:
-                _check_args(kind, e[kind], f"{where}.expect[{j}]", errors)
+        unknown = set(st) - STEP_KEYS
+        if unknown:
+            errors.append(f"{where}: unknown {', '.join(sorted(unknown))} (allowed: {', '.join(sorted(STEP_KEYS))})")
+        if st.get("once") not in (None, True, False, "first", "last"):
+            errors.append(f"{where}: once must be true, first or last")
+        _check_step_body(st, where, tabs, errors)
+        inline = [x for a in st.get("actions") or [] if isinstance(a, dict) for x in _as_list(a.get("expect"))]
+        for j, e in enumerate([*(st.get("expect", []) or []), *inline]):
+            kind = next(iter(e), None) if isinstance(e, dict) and len(e) == 1 else None
             if kind == "db":
                 arg = e["db"] or {}
                 db = arg.get("database", "default")
@@ -329,7 +496,21 @@ def validate(sc) -> list[str]:
             kind = _single_key(a, f"{where}.annotate[{j}]", ANNOTATIONS, errors)
             if kind and not (isinstance(a[kind], (str, dict)) and (isinstance(a[kind], str) or "target" in a[kind])):
                 errors.append(f"{where}.annotate[{j}]: {kind} needs a target")
+    cleanup = sc.get("cleanup")
+    if cleanup is not None:
+        if not isinstance(cleanup, list) or not all(isinstance(c, dict) for c in cleanup):
+            errors.append("cleanup: must be a list of steps (tab + actions)")
+        else:
+            for i, st in enumerate(cleanup):
+                where = f"cleanup[{st.get('id') or i}]"
+                if st.get("tab") not in tabs:
+                    errors.append(f"{where}: tab must be one of {sorted(tabs)}")
+                _check_step_body(st, where, tabs, errors, need_expect=False)
     return errors
+
+
+def _as_list(v):
+    return [] if v is None else v if isinstance(v, list) else [v]
 
 
 def load_env_file(path):
@@ -347,7 +528,7 @@ def load_env_file(path):
 
 
 def load(path) -> dict:
-    sc = expand(yaml.safe_load(Path(path).read_text(encoding="utf-8")), Path(path).resolve().parent)
+    sc = expand(read_yaml(path), Path(path).resolve().parent)
     problems = validate(sc)
     if problems:
         raise ScenarioError("invalid scenario:\n  - " + "\n  - ".join(problems))
