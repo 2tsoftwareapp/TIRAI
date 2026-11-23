@@ -1,0 +1,61 @@
+# TIRAI
+
+> TIRAI is an agent skill and Python CLI (`tirai`) that records test evidence. You write a test scenario
+> (steps, each with actions and expected results); TIRAI runs it in a real Chrome/Edge browser through
+> Tencent BrowserSkill, checks the database in a second browser tab (DBX web) plus a read-only SQL query,
+> draws Snagit-style annotations on the page, records each tab, and uses ffmpeg to compose one MP4 with
+> a header bar, PASS/FAIL badges and burned-in subtitles, plus a Markdown step report.
+
+TIRAI is an orchestration layer, not a browser or database tool:
+
+- Browser control, screenshots and per-tab MP4 recording: Tencent BrowserSkill (`bsk` CLI + browser extension).
+- Database UI in the browser: DBX web (`t8y2/dbx`, port 4224, 100+ engines).
+- TIRAI: scenario format, dry-run and record runner, DOM and read-only DB assertions, injected annotation
+  overlay (`annotate.js`), timeline, subtitle generation, video composition, report.
+
+Workflow (always in this order): `tirai validate` → `tirai run --dry-run` (no video, every step must pass)
+→ `tirai record` (dry-run again, record one segment per tab, compose) → hand over `evidence/record/final.mp4`
+and `report.md`.
+
+Key facts for agents:
+
+- Install: macOS/Linux `curl -fsSL https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.sh | sh -s -- --yes`;
+  Windows `$env:TIRAI_SETUP_ARGS="--yes"; irm https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.ps1 | iex`.
+  Requires Python 3.10+. The installer creates `~/.tirai/venv`, links `tirai` into `~/.local/bin` and runs
+  `tirai setup` (ffmpeg via the OS package manager, BrowserSkill CLI via its official installer, agent skills).
+- The BrowserSkill browser extension must be installed by the human from the Chrome Web Store / Edge Add-ons.
+  Never automate it. Never run `sudo` without asking; if a package install needs a password, ask the user.
+- Verify with `tirai doctor`: every required check must be `ok` before running scenarios.
+- Secrets only as `${ENV_VAR}` in scenarios; values live in the environment or a git-ignored `.env` next to
+  the scenario (loaded automatically, or `--env-file`). Secrets are never written to timelines or reports.
+- Database checks use a read-only user. DBX renders result cells on a canvas, so `expect: db` runs its own
+  read-only query (PostgreSQL, MySQL, SQLite) and annotations target DBX cells with `{ grid: {...} }`.
+- Find selectors with `bsk open <url>` / `bsk snapshot`; do not guess. A missing selector, annotation target
+  or env var fails the step (fail closed).
+- Supported agents: Claude Code, Codex, Cursor, Antigravity, Devin (`tirai install-skill --agent <name>`).
+
+## Docs
+
+- [Getting started](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/getting-started.md): install, demo stack (web app + PostgreSQL + DBX), first recording
+- [Scenario format](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/scenario-format.md): tabs, databases, step fields, actions, expectations, recording model
+- [Annotations](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/annotations.md): box, circle, arrow, text, badge, highlight, blur; targets; animation modes
+- [Configuration](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/configuration.md): environment variables, `.env`, scenario settings, DBX selector overrides
+- [Agents](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/agents.md): skill install locations per agent
+- [Troubleshooting](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/troubleshooting.md): common errors and fixes
+
+## Agent skill
+
+- [SKILL.md](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/skills/tirai-evidence/SKILL.md): the step-by-step workflow an agent follows
+- [Setup reference](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/skills/tirai-evidence/references/setup.md): what `tirai setup` installs and the manual steps
+
+## Examples
+
+- [Demo scenario](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/examples/demo/login-lock.yaml): 6 steps across a web app tab and a DBX tab
+- [Demo stack](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/examples/demo/docker-compose.yml): web app, PostgreSQL with seed data, DBX web
+
+## Optional
+
+- [Full context in one file](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/llms-full.txt): this file plus every doc above inlined
+- [Architecture](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/architecture.md): components and design rules
+- [Changelog](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/CHANGELOG.md): release history
+- [Security policy](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/SECURITY.md): reporting vulnerabilities, data handling

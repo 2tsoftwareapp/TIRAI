@@ -18,4 +18,5 @@ End-to-end changes (runner, BrowserSkill wrapper, annotations) must be verified 
 - Never persist secrets; database access stays read-only.
 - `annotate.js` stays dependency-free and isolated in its shadow root.
 - When the scenario vocabulary changes, update `skills/tirai-evidence/references/*` and `docs/` together.
+- After editing docs, the skill, the CLI or the demo scenario, run `python scripts/build_llms_full.py` (a test fails if `llms-full.txt` is stale).
 - Small, focused PRs with tests.
