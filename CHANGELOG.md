@@ -9,6 +9,13 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 ### Added
 
 - `eval:` action: run JS in the page (e.g. seed cookies/localStorage before a flow); fails on an exception or `false`.
+- `targets:` + `@name`: name an element once with fallback locators (`testid=`, CSS, `role=…[name=…]`,
+  `label=`, `placeholder=`, `text=`/`text*=`, `within:`, `nth:`); it is tagged in the page as `data-tirai-id` and
+  kept tagged through re-renders and navigation, on agent-browser and bsk. 0 or 2+ matches fail the step; a
+  fallback match passes with a warning (also in `timeline.json`). Locators also work inline (`click: text=Save`).
+- `tirai inspect <scenario|url>` (and MCP `inspect`): per-step element map with unique locators and a suggested
+  `targets:` block, including pages reached after login.
+- Selector failures end with `nearby: …` suggestions from the current page.
 - `tirai verify --out <dir>` (same as the positional folder, matching `run`/`record --out`).
 
 ### Fixed

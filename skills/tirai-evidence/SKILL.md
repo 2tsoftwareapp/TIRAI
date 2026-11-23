@@ -40,8 +40,14 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
 
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
-- Find selectors with `agent-browser open <url>` + `agent-browser snapshot` (or `bsk snapshot`) before writing them; do not guess. Or let the user click
-  the flow once: `tirai capture <url> -o <file>` opens a browser; the user clicks the flow and closes the window.
+- Name elements once under `targets:` and use `@name` in actions/expect/annotate/zoom (fallback locators like
+  `testid=`, `#id`, `role=button[name="Save"]`, `label=`, `text=`; see [references/scenario.md](references/scenario.md)).
+  Get them with `tirai inspect <file>` (or `tirai inspect <url>`): it dry-runs the flow and writes each page's
+  elements plus a ready `targets:` block to `evidence/inspect/`, pages after login included; do not guess.
+  Or let the user click the flow once: `tirai capture <url> -o <file>` opens a browser; the user clicks the flow
+  and closes the window.
+- A failure ending in `nearby: …` lists the page's closest elements: fix the target from it. A `warning: target
+  @x … used …` means a fallback locator was needed: update that target.
 - Database tab: `dbx.connect: {name: ..., host: ...}` on the DBX tab creates the connection from `databases.default`
   (or run `tirai dbx-connect --dsn-env EV_DB_DSN --name <name>`); no manual DBX setup.
 - Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `save:` to reuse on-screen values as `{{name}}`.

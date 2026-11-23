@@ -97,6 +97,30 @@ def cmd_run(args):
     return _summary(tl)
 
 
+def cmd_inspect(args):
+    from tirai import inspect
+    from tirai.bsk import DriverError
+    from tirai.scenario import ScenarioError, load
+
+    if args.headed:
+        os.environ["TIRAI_HEADED"] = "1"
+    try:
+        if args.scenario.startswith(("http://", "https://")):
+            sc = inspect.url_scenario(args.scenario)
+        else:
+            load_env(args)
+            sc = load(args.scenario)
+        res = inspect.run(sc, Path(args.out), session=args.session, driver=args.driver)
+    except (DriverError, RuntimeError, ScenarioError, OSError) as e:
+        print(f"error: {e}")
+        return 1
+    print(f"inspect: {res['pages']} page(s), {res['targets']} suggested target(s) -> {res['dir']}")
+    print(f"  per step: {res['dir']}/<step>.md   targets block: {res['dir'] / 'targets.yaml'}")
+    for s in res["failed"]:
+        print(f"  note: {s['id']} {s.get('status')}: {s.get('error') or 'expectation failed'}")
+    return 0
+
+
 def cmd_compose(args):
     from tirai import compose
 
@@ -495,6 +519,15 @@ def build_parser():
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--record", action="store_true")
     s.set_defaults(fn=cmd_run)
+
+    s = sub.add_parser("inspect", help="list each step's page elements with locators + a suggested targets: block")
+    s.add_argument("scenario", help="scenario file, or a URL to inspect a single page")
+    s.add_argument("--env-file", help="KEY=VALUE file (default: .env next to the scenario)")
+    s.add_argument("--out", default="evidence", help="output root; writes <out>/inspect/ (default: evidence/)")
+    s.add_argument("--driver", choices=["agent-browser", "bsk"], help="browser driver (default: agent-browser)")
+    s.add_argument("--headed", action="store_true", help="show the agent-browser window")
+    s.add_argument("--session", help="reuse a live driver session")
+    s.set_defaults(fn=cmd_inspect)
 
     s = sub.add_parser("compose", help="build final.mp4 + subtitles + report from a recorded timeline")
     s.add_argument("timeline")

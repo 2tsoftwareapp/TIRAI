@@ -245,6 +245,12 @@ def validate(sc) -> list[str]:
         if key not in SETTINGS:
             errors.append(f"settings.{key}: unknown (allowed: {', '.join(sorted(SETTINGS))})")
     _check_privacy(sc.get("privacy"), errors)
+    from tirai import targets as tg
+
+    tg.check(sc.get("targets"), errors)
+    if not errors and isinstance(sc.get("steps"), list):
+        _, missing = tg.apply(sc)
+        errors += [f"@{m}: not defined under targets" for m in sorted(missing)]
     tabs = sc.get("tabs")
     if not isinstance(tabs, dict) or not tabs:
         errors.append("tabs: at least one tab is required")
@@ -345,5 +351,8 @@ def load(path) -> dict:
     problems = validate(sc)
     if problems:
         raise ScenarioError("invalid scenario:\n  - " + "\n  - ".join(problems))
+    from tirai import targets as tg
+
+    sc, _ = tg.apply(sc)
     sc["_dir"] = str(Path(path).resolve().parent)  # relative upload files resolve against the scenario
     return sc

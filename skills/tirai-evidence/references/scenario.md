@@ -32,6 +32,63 @@ steps: [...]
 | `once` | no | With `cases:`/`matrix:`, run this step only for the first case |
 | `include` | — | Instead of a step: `include: file.yaml` (+ `with:` vars, `prefix:` for ids) |
 
+## Targets (`@name`)
+
+Name each element once under `targets:` and use `@name` wherever a selector goes: actions, `expect`,
+`annotate`, `zoom` and `privacy.selectors`. Each target lists locators tried in order. The first one that
+matches **exactly one** element (visible elements win over hidden ones) is tagged in the page with
+`data-tirai-id`, and the step addresses it through that attribute.
+
+```yaml
+targets:
+  email: "#email"                          # the site's own id/test id when it has one
+  password: label=Password
+  submit:                                  # fallbacks, tried top to bottom
+    - testid=login-submit
+    - "#submit"
+    - role=button[name="Sign in"]
+  bob_row: { any: ["text*=bob@demo.local"], within: "#users", nth: 0 }
+steps:
+  - id: S1
+    tab: app
+    title: Log in
+    actions:
+      - fill: { selector: "@email", value: "${EMAIL}" }
+      - click: "@submit"
+    expect:
+      - visible: "@bob_row"
+    annotate:
+      - box: "@submit"
+```
+
+| Locator | Matches |
+|---|---|
+| `#id`, `.class`, any CSS (or `css=…`) | `document.querySelectorAll` |
+| `testid=x` | `data-testid`, `data-test-id`, `data-test`, `data-qa`, `data-cy` equal to `x` |
+| `role=button[name="Save"]` | role (`textbox`, `button`, `link`, `combobox`, `checkbox`, `radio`, `heading`, `tab`, `menuitem`, `option`, `cell`, `row`, `dialog`, `img`, or any ARIA role) + exact accessible name; `role=dialog` alone = any |
+| `label=Email` | form field whose label (`<label>`, `aria-label`, `aria-labelledby`) is exactly `Email` |
+| `placeholder=Search` | element with that placeholder |
+| `text=Total` / `text*=Total` | innermost element whose text equals / contains the value |
+
+- `within: <css>` limits the search to one container; `nth: <n>` picks the n-th match (0-based) on purpose.
+- A locator can also be written inline: `click: role=button[name="Sign in"]` works without a `targets:` entry.
+- **No guessing:** 0 or 2+ matches for every locator fails the step and lists what each locator matched,
+  for example `target @save: no locator matched exactly one element (role=button[name="Save"]: 2 [button in form#a, button in form#b])`.
+- **Fallback used:** when an earlier locator stops matching and a later one finds the element, the step still
+  passes, prints `warning: target @submit: #submit: 0 -> used 'role=button[name="Sign in"]'; update the target`,
+  and stores it under `warnings` in `timeline.json`.
+- Tags are kept in sync while the page re-renders (SPA) and are re-applied after navigation. The page only gains
+  the `data-tirai-id` attribute; nothing visible changes.
+- A selector that matches nothing (plain CSS or a target) ends with `; nearby: #email (textbox "Email")`
+  suggestions taken from the current page.
+- Browser tabs only; desktop (`app:`) tabs keep their agent-desktop selectors.
+
+`tirai inspect <scenario>` dry-runs the flow and, after every step, writes `<out>/inspect/<step>.md` (each
+element's role, name and unique locators, preferred first) and one `<out>/inspect/targets.yaml` with a
+ready-to-paste `targets:` block for every page reached, including pages after login. It prefers test ids and
+stable ids/names, skips ids that look generated, and leaves out elements with no unique locator.
+`tirai inspect <url>` does the same for a single page.
+
 ## Actions
 
 | Action | Example |

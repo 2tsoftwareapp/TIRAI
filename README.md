@@ -232,9 +232,10 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 | `tirai record <file>` | Dry-run, record and compose in one go (`--record-failures`: keep going and record bug evidence) |
 | `tirai verify [dir]` | Check an evidence folder against its `manifest.sha256` |
 | `tirai compose <timeline.json>` | Rebuild the video and report from a recorded timeline |
+| `tirai inspect <file\|url>` | List every step's page elements with unique locators and write a ready `targets:` block (use as `@name`) |
 | `tirai capture <url>` | Click a flow once in the browser; get a scenario (`from-trace` converts a bsk trace) |
 | `tirai dbx-connect` | Create/update the DBX connection from a DSN (`--dsn-env EV_DB_DSN --name shop`) |
-| `tirai mcp` | Run the MCP server (validate, dry_run, record, compose, verify, sign, export, scan_pii, index, from_spec, capture, …) |
+| `tirai mcp` | Run the MCP server (validate, dry_run, record, compose, verify, sign, export, scan_pii, index, from_spec, capture, inspect, …) |
 | `tirai install-skill` | Install the skill for an agent or into any directory |
 | `tirai from-spec <file>` | Draft a scenario from Gherkin `.feature`, a Markdown table or CSV (`--url` resolves selectors live) |
 | `tirai export <dir>` | Write `junit.xml`, `xray.json` (Xray import) and `testrail.csv` (TestRail import); nothing is uploaded |
