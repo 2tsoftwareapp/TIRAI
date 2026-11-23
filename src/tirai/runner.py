@@ -102,11 +102,13 @@ class Runner:
         tid = self.tabs[tab]
         if kind == "navigate":
             self.b.navigate(tid, interpolate(arg))
+            self.apply_privacy(tab)
             self.pause(1.0)
         elif kind == "fill":
             self.b.fill(tid, arg["selector"], interpolate(arg["value"]))
         elif kind == "click":
             self.b.click(tid, arg)
+            self.apply_privacy(tab)
             self.pause(1.0)
         elif kind == "press":
             arg = {"key": arg} if isinstance(arg, str) else arg
@@ -315,6 +317,15 @@ class Runner:
         }
 
     # ---------- annotations ----------
+    def apply_privacy(self, tab):
+        """(Re)install auto PII masking in the tab; it keeps masking as the DOM changes until the next load."""
+        privacy = self.sc.get("privacy")
+        if not privacy or self.sc["tabs"][tab].get("privacy") is False:
+            return
+        cfg = {**privacy, "patterns": [interpolate(p) for p in privacy.get("patterns") or []]}
+        cfg["keep"] = [interpolate(str(k)) for k in privacy.get("keep") or []]
+        self.b.evaluate(self.tabs[tab], annotate_js() + f";__ann.mask({js(cfg)})")
+
     def annotate(self, tab, items):
         calls = ["__ann.clear()"]
         for item in items or []:
@@ -359,8 +370,10 @@ class Runner:
                 self.annotate(tab, [])
                 if any("no_console_errors" in e for e in step.get("expect", [])):
                     self.console_since[tab] = self.console_cursor(tab)
+                self.apply_privacy(tab)
                 for action in step.get("actions", []):
                     self.do_action(tab, render(action, self.vars, strict=True))
+                    self.apply_privacy(tab)
                 for exp in step.get("expect", []):
                     rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
                 rec["status"] = "passed" if all(c["ok"] for c in rec["checks"]) else "failed"

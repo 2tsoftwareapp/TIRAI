@@ -31,6 +31,8 @@ REQUIRED = {
 }
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
 SETTINGS = {"hold", "timing_scale", "expect_timeout"}
+PII_RULES = {"email", "phone", "card", "token"}
+PRIVACY_KEYS = {"mask", "patterns", "selectors", "keep", "inputs"}
 DBX_KEYS = {"new_query", "editor", "password", "run_key"}
 ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -200,6 +202,28 @@ def _check_args(kind, arg, where, errors):
         errors.append(f"{where}: {kind} is missing {', '.join(missing)}")
 
 
+def _check_privacy(p, errors):
+    if p is None:
+        return
+    if not isinstance(p, dict):
+        errors.append("privacy: must be a mapping")
+        return
+    for key in p:
+        if key not in PRIVACY_KEYS:
+            errors.append(f"privacy.{key}: unknown (allowed: {', '.join(sorted(PRIVACY_KEYS))})")
+    for key in ("mask", "patterns", "selectors", "keep"):
+        if p.get(key) is not None and not isinstance(p[key], list):
+            errors.append(f"privacy.{key}: must be a list")
+    for rule in p.get("mask") or []:
+        if rule not in PII_RULES:
+            errors.append(f"privacy.mask: unknown rule {rule!r} (allowed: {', '.join(sorted(PII_RULES))})")
+    for pat in p.get("patterns") or []:
+        try:
+            re.compile(str(pat))
+        except re.error as e:
+            errors.append(f"privacy.patterns: invalid pattern {pat!r}: {e}")
+
+
 def validate(sc) -> list[str]:
     """Return a list of human-readable problems; empty means the scenario is runnable."""
     errors = []
@@ -214,6 +238,7 @@ def validate(sc) -> list[str]:
     for key in settings:
         if key not in SETTINGS:
             errors.append(f"settings.{key}: unknown (allowed: {', '.join(sorted(SETTINGS))})")
+    _check_privacy(sc.get("privacy"), errors)
     tabs = sc.get("tabs")
     if not isinstance(tabs, dict) or not tabs:
         errors.append("tabs: at least one tab is required")

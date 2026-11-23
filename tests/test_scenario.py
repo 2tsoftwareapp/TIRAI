@@ -45,6 +45,9 @@ def test_valid_scenario_has_no_problems():
         (lambda s: s["steps"][0].update(zoom={"factor": 2}), "zoom needs a selector"),
         (lambda s: s["steps"][0].update(layout="grid"), "layout must be split"),
         (lambda s: s["steps"][0].update(subtitle={}), "subtitle must be text"),
+        (lambda s: s.update(privacy={"mask": ["ssn"]}), "unknown rule 'ssn'"),
+        (lambda s: s.update(privacy={"patterns": ["("]}), "invalid pattern"),
+        (lambda s: s.update(privacy={"blur": []}), "privacy.blur: unknown"),
     ],
 )
 def test_validation_problems(mutate, fragment):
