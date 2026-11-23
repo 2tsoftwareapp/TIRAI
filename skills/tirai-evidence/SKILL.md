@@ -50,7 +50,16 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
   @x … used …` means a fallback locator was needed: update that target.
 - Database tab: `dbx.connect: {name: ..., host: ...}` on the DBX tab creates the connection from `databases.default`
   (or run `tirai dbx-connect --dsn-env EV_DB_DSN --name <name>`); no manual DBX setup.
-- Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `save:` to reuse on-screen values as `{{name}}`.
+- Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `for_each:` to repeat one step per item
+  (N order lines), `once: last` for a step after the last case, `save:` to reuse on-screen values as `{{name}}`.
+- Mark steps that create/change data with `writes: <what>` and undo them under `cleanup:`; a dry-run stops before
+  them unless `--allow-writes`. Never dry-run writes repeatedly on a shared tenant without asking the user.
+- Popups (`window.open`): declare a tab `{popup: true, match: "/path"}` and use it in the next step.
+- Check a field before an action unmounts it with an inline `- expect: {...}` among the actions.
+- Slow SPAs: `settings.expect_timeout: 15` or `wait_for: {idle: true}` instead of fixed `wait:`;
+  `settings.viewport: {width: 1600, height: 900}` when forms do not fit.
+- Selectors are CSS or TIRAI locators; Playwright syntax (`:has-text`, `>>`) does not work. Quote values that start
+  with `${...}` or `{{...}}` inside `{ }`.
 - Video: `zoom: <selector>` on a step, `layout: split` to show UI and DB side by side; `subtitle: {en, vi}` + `--lang`.
 - Real data on screen: add `privacy: { mask: [email, phone, card, token] }` (and `keep:` for the record under test).
 - Secrets go in `${ENV_VAR}` only. Put values in a git-ignored `.env` next to the scenario
@@ -67,6 +76,11 @@ tirai run <file> --dry-run
 
 Read the failing step's `expect ... -> actual ...` line and `evidence/dry-run/step-<id>.png`.
 Fix the scenario (selector, wait, data) or report the product bug to the user. Repeat until all steps pass.
+`network:`/`console:` lines (e.g. a 401) mean the page had errors even if the step passed: check them, and use
+`--fresh` to start without an old login.
+
+Long flow: `--keep-session` once, then `--session <name> --from-step <id>` to rerun only the tail; `--until <id>`
+stops early.
 
 ## 3. Record + compose
 
@@ -76,7 +90,8 @@ tirai record <file>            # dry-run again, record, then compose
 
 Outputs in `evidence/record/`: `final.mp4`, `subtitles.srt`, `report.md`, `report.html`, `report.xlsx`,
 `timeline.final.json`, `manifest.sha256`, per-tab `seg-*.mp4` and `step-*.png`. To document a bug, record the
-failing run with `tirai record <file> --record-failures` (stops after the first failing step, FAIL in the header). Re-compose without re-recording: `tirai compose evidence/record/timeline.json`.
+failing run with `tirai record <file> --record-failures` (stops after the first failing step, FAIL in the header).
+`--trim-still` fast-forwards long stretches where nothing changes. Re-compose without re-recording: `tirai compose evidence/record/timeline.json`.
 
 Optional extras: `tirai compose evidence/record/timeline.json --voice` (spoken subtitles),
 `tirai scan-pii evidence/record --fix` (OCR pass for PII drawn on canvas), `tirai sign evidence/record --key

@@ -20,16 +20,19 @@ steps: [...]
 | Field | Required | Meaning |
 |---|---|---|
 | `id` | yes | Unique step id (`S1`, `S2`, ...) |
-| `tab` | yes | Tab name from `tabs:` |
+| `tab` | yes | Tab name from `tabs:` (a tab with `popup: true` follows a window the page opened) |
 | `title` | yes | Header bar text and report row |
 | `subtitle` | no | Burned-in subtitle (defaults to `title`); a `{en: ..., vi: ...}` map for several languages |
 | `actions` | no | Executed in order |
-| `expect` | yes | All must pass for the step to pass |
+| `expect` | yes | All must pass for the step to pass (optional when an action is an inline `expect:`) |
 | `annotate` | no | Drawn after expectations are checked |
 | `hold` | no | Seconds the step stays on screen (default 2.5 recorded, 0.3 dry-run) |
 | `zoom` | no | Selector (or `{target, factor, at}`) the video eases in on during this step |
 | `layout` | no | `split`: show the previous step (or `split_with: <id>`) beside this one |
-| `once` | no | With `cases:`/`matrix:`, run this step only for the first case |
+| `once` | no | With `cases:`/`matrix:`, run this step only for the first case (`once: last`: only after the last case) |
+| `for_each` | no | Repeat this step once per item of a list (or the name of a list in `vars:`/the case); see [Loops](#loops-and-steps-that-run-once) |
+| `save` | no | `{ name, selector, attribute?, pattern? }` (or a list): store a value after the actions, before `expect` |
+| `writes` | no | `true` or a short text (`creates an order`): this step changes data; see [Steps that write data](#steps-that-write-data) |
 | `include` | — | Instead of a step: `include: file.yaml` (+ `with:` vars, `prefix:` for ids) |
 
 ## Targets (`@name`)
@@ -98,7 +101,7 @@ stable ids/names, skips ids that look generated, and leaves out elements with no
 | `click` | `click: "button[type=submit]"` |
 | `press` | `press: Enter` or `press: { key: "Ctrl+Enter", selector: ".cm-content" }` |
 | `wait` | `wait: 500` (ms) |
-| `wait_for` | `wait_for: "#welcome"` |
+| `wait_for` | `wait_for: "#welcome"`, `wait_for: { selector: "#menu [role=treeitem]", timeout: 15000 }`, or `wait_for: { idle: true, timeout: 15000 }` (document loaded and no new request for 1 s; warns and continues on timeout) |
 | `sql` | `sql: "SELECT ..."` (DBX tab: opens a query editor once, types, runs with Ctrl+Enter) |
 | `dbx_login` | `dbx_login: "${DBX_PASSWORD}"` (tab `setup:` only; skipped if already logged in) |
 | `select` | `select: { selector: "#country", value: VN }` (option `value`; a list for multi-select) |
@@ -107,6 +110,15 @@ stable ids/names, skips ids that look generated, and leaves out elements with no
 | `upload` | `upload: { selector: "input[type=file]", file: fixtures/invoice.pdf }` (path relative to the scenario; a list for several files) |
 | `eval` | `eval: "localStorage.setItem('token', '${TOKEN}')"` — run JS in the page (seed cookies/localStorage, flags); fails if it throws or returns `false`; prefer real actions for anything the video should show |
 | `dialog` | `dialog: accept` or `dialog: dismiss` — put it before the action that opens `alert`/`confirm`/`prompt`; lasts until the page navigates |
+| `expect` | `expect: { value: { selector: "#ctrl", equals: X9 } }` (or a list) — a check between actions, e.g. before a tab switch unmounts the field; a failure stops the step |
+
+Before `click`, `fill`, `select`, `hover`, `upload` and `press` (with a selector), TIRAI scrolls the element into
+view when it is outside the viewport (`settings.auto_scroll: false` turns it off).
+
+Selectors are CSS (native `:has()` works, e.g. `button:has(svg.add)`) or the locators under
+[Targets](#targets-name). Playwright-only syntax (`:has-text()`, `:text-is()`, `>>`, `:visible`) never matches in
+agent-browser/bsk, so `tirai validate` rejects it and suggests a locator. A CSS list (`"a, b"`) takes the first
+match in page order, not list order; `validate` warns and suggests `targets:` fallbacks.
 
 ## Expectations
 
@@ -115,7 +127,7 @@ stable ids/names, skips ids that look generated, and leaves out elements with no
 | `visible` | `visible: "#email"` |
 | `text_contains` | `text_contains: { selector: ".error", text: "locked" }` (no selector = whole page) |
 | `not_visible` | `not_visible: "#login-error"` (missing, zero-size, `display:none` or `visibility:hidden`) |
-| `text_matches` | `text_matches: { selector: "#total", pattern: "^\\d+ items$", flags: i }` (JavaScript RegExp) |
+| `text_matches` | `text_matches: { selector: "#total", pattern: "^\\d+ items$", flags: i }` (JavaScript RegExp, like `save.pattern`) |
 | `url_contains` | `url_contains: "/dashboard"` |
 | `value` | `value: { selector: "#email", equals: "a@b.c" }` (form field value) |
 | `attribute` | `attribute: { selector: "#save", name: disabled, equals: "" }` |
@@ -124,8 +136,68 @@ stable ids/names, skips ids that look generated, and leaves out elements with no
 | `no_console_errors` | `no_console_errors: {}` or `{ ignore: ["favicon"] }` (console errors/exceptions raised during this step) |
 | `db` | `db: { sql: "SELECT status FROM users WHERE id=2", rows: [{status: LOCKED}] }` (`columns:` defaults to the keys of the first expected row, in SELECT order) |
 
-DOM checks retry for up to 6 s. `db` runs read-only against `databases.<name>.dsn` (default `default`),
+DOM checks retry for up to 6 s (`settings.expect_timeout: 15` for slow SPAs). `db` runs read-only against `databases.<name>.dsn` (default `default`),
 independently of what the DBX tab shows: DBX draws its result grid on a canvas, so its cells are not DOM text.
+
+Every step also notes failed requests (HTTP 4xx/5xx seen by the page, e.g. a silent `401` from an expired
+session) and console errors raised while it ran. They are printed, stored in `timeline.json` and listed in the
+report even when the step passes. `settings.strict_network: true` fails the step instead;
+`settings.ignore_requests: ["/healthz"]` drops URLs you expect to fail.
+
+## Steps that write data
+
+A dry-run runs the real actions (it only skips the video), so a step that saves an order creates one every time.
+Mark such steps with `writes:`; `sql:` actions with `INSERT`/`UPDATE`/`DELETE`/DDL count automatically.
+
+```yaml
+steps:
+  - id: SAVE
+    tab: app
+    title: Save the order
+    writes: creates an order (受注)
+    actions: [{ click: "@save" }]
+    save: { name: orderNo, selector: "#orderNo" }
+    expect: [{ text_contains: { text: "saved" } }]
+cleanup:                                   # after the run; not recorded; only when a write step ran
+  - tab: db
+    actions:
+      - sql: "DELETE FROM orders WHERE order_no = '{{orderNo}}'"
+```
+
+- `tirai validate` lists the steps that write data.
+- `tirai run --dry-run` stops before the first write step and reports the steps before it; `--allow-writes` runs
+  everything. `tirai record` dry-runs up to the first write step, then records the whole flow once.
+- `--until <step>` stops a dry-run after that step (or the last step expanded from it).
+- The report has a "Data written" table with each write step and the values it saved, so test data can be
+  cleaned up by hand when there is no `cleanup:`.
+
+## Iterating on a long flow
+
+```bash
+tirai run flow.yaml --dry-run --keep-session            # prints: session kept: tirai-1234
+tirai run flow.yaml --dry-run --session tirai-1234 --from-step S14
+```
+
+`--from-step` continues on the pages the kept session has open (no new tab, no tab `setup:`), with the values
+saved by the previous run in the same `--out` folder. `--fresh` clears cookies and storage before tab setup, so
+the run starts logged out instead of reusing an old session (bsk cannot clear HttpOnly cookies).
+
+## Popup windows
+
+```yaml
+tabs:
+  app: { url: "${APP_URL}" }
+  order: { popup: true, match: "/AB03001" }   # adopted when a step first uses it
+```
+
+A `popup: true` tab has no URL: the first step on it binds to the newest browser tab the page opened
+(`window.open`, `target=_blank`) whose URL contains `match`, waiting up to `expect_timeout`. If that window
+closes and a new one opens, the next step binds again.
+
+## Viewport
+
+`settings.viewport: { width: 1600, height: 900 }` sets the page size on agent-browser (each tab and popup).
+bsk uses the size of your browser window.
 
 ## Recording model
 
@@ -161,8 +233,31 @@ steps:
 
 - `{{name}}` comes from `vars:`, the current case, or a value saved earlier; `${NAME}` stays an environment variable.
 - Steps repeat once per case with ids `LOGIN-1`, `LOGIN-2`, … and titles prefixed `[Alice]`.
-- `save: { name, selector, attribute?, pattern? }` stores an element's value/text (first regex group if
-  `pattern` has one). Values saved in one action are visible to the next action or check of the same step.
+- `save: { name, selector, attribute?, pattern?, flags? }` stores an element's value/text (first group of the
+  JavaScript RegExp `pattern` if it has one), as an action or as a step key. Values saved in one action are visible
+  to the next action or check of the same step. `db: { save: { variable: column } }` stores a column of the first
+  row; a missing column or an empty result is an error.
+
+### Loops and steps that run once
+
+```yaml
+vars:
+  lines: [{ code: A01, qty: 2 }, { code: B07, qty: 1 }]
+steps:
+  - id: LINE
+    for_each: lines                           # or an inline list; scalars are {{item}} (rename with as:)
+    tab: app
+    title: "Line {{index}}: {{code}}"
+    actions:
+      - click: "@add_row"
+      - fill: { selector: "#lines tr:last-child .code", value: "{{code}}" }
+    expect: [{ value: { selector: "#lines tr:last-child .code", equals: "{{code}}" } }]
+  - id: SAVE                                  # runs once, after every line
+    ...
+```
+
+`for_each` repeats one step per item (`LINE-1`, `LINE-2`, …; `{{index}}` counts from 1). With `cases:`, use
+`once: last` for a step that must run once after the last case (`once: true` = first case only).
 - A placeholder that is the whole value keeps its type (`equals: "{{count}}"` stays a number). An undefined
   variable at run time is an error.
 
@@ -176,6 +271,7 @@ steps:
 | `--lang vi` | `tirai record` / `compose` | burns that subtitle language; every language is also written as `subtitles.<lang>.srt` |
 | `zoom: follow` | step | zooms in and pans from one action target (click, fill, select…) to the next |
 | `camera: follow` | `settings:` | `zoom: follow` for every step without its own `zoom:`; `camera_factor` (default 1.6) sets the zoom |
+| `--trim-still` | `tirai record` / `compose` (or `settings.trim_still: true`) | stretches of 2 s or more where the screen does not change play at 8× with a badge; each step's start and closing `hold` stay at normal speed |
 | `fast_forward: 4` | `settings:` | `wait`/`wait_for` longer than 1.5 s play at 4× with a "4x" badge (default 4; `0` turns it off) |
 | `--voice` | `tirai compose` | reads each subtitle aloud (macOS `say`, Windows SAPI, Linux `espeak-ng`, or `$TIRAI_TTS_CMD` with `{text}` `{out}` `{lang}`); a clip is held until its speech ends |
 

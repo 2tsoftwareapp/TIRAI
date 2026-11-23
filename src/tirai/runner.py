@@ -117,6 +117,7 @@ class Runner:
         self.dbx_editor_ready = set()
         self.console_since = {}
         self.vars = dict(resume_vars or {})
+        self.resumed = dict(resume_vars or {})
         self.targets = scenario.get("_targets") or tg.normalize(scenario.get("targets"))
         self.warnings = []
         self.inspect = False
@@ -170,9 +171,12 @@ class Runner:
             if resume:
                 # --from-step: continue on the page the earlier run left open (state, login) instead of a new tab.
                 taken = set(self.tabs.values())
-                hits = [t["id"] for t in existing if t["url"].startswith(_origin(url)) and t["id"] not in taken]
+                free = [t for t in existing if t["id"] not in taken]
+                hits = [t["id"] for t in free if t["url"].startswith(url)] or [
+                    t["id"] for t in free if t["url"].startswith(_origin(url))
+                ]
                 if hits:
-                    self.tabs[name] = hits[-1]
+                    self.tabs[name] = hits[0]  # the oldest: popups opened later share the origin
                     self.prepare_tab(name)
                     continue
             self.provision_dbx(cfg)
@@ -192,7 +196,9 @@ class Runner:
             self.prepare_tab(name)
             for action in cfg.get("setup", []):
                 self.do_action(name, action)
-        if hasattr(self.b, "tab_list"):
+        if resume:
+            self.seen_tabs = set(self.tabs.values())  # popups left open by the earlier run can be adopted
+        elif hasattr(self.b, "tab_list"):
             try:
                 self.seen_tabs = {t["id"] for t in self.b.tab_list()}
             except DriverError:
@@ -923,7 +929,9 @@ def previous_vars(out_dir):
         tl = json.loads(f.read_text(encoding="utf-8"))
     except ValueError:
         return {}
-    return {k: v for st in tl.get("steps", []) for k, v in (st.get("saved") or {}).items()}
+    found = dict(tl.get("resumed_vars") or {})
+    found.update({k: v for st in tl.get("steps", []) for k, v in (st.get("saved") or {}).items()})
+    return found
 
 
 def run(
@@ -977,7 +985,7 @@ def run(
         "steps": steps,
         "total_steps": len(r.planned()),
         **({"stopped": r.stopped} if r.stopped else {}),
-        **({"from_step": from_step} if from_step else {}),
+        **({"from_step": from_step, "resumed_vars": r.resumed} if from_step else {}),
         **({"cleanup": r.cleanup_results} if r.cleanup_results else {}),
         "hold": hold,
         **({"trim_still": True} if settings.get("trim_still") else {}),
