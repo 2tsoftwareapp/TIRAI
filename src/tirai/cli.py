@@ -166,6 +166,14 @@ def cmd_sign(args):
     return 0
 
 
+def cmd_index(args):
+    from tirai import index
+
+    out, runs = index.write(args.dirs, args.out)
+    print(f"wrote {out} ({len(runs)} runs)")
+    return 0 if runs else 1
+
+
 def cmd_verify(args):
     from tirai import report, sign
 
@@ -438,6 +446,11 @@ def build_parser():
     s.add_argument("--project-key", help="Xray: Jira project key for a new test")
     s.add_argument("--case-id", help="TestRail: case id (e.g. C123) for every row")
     s.set_defaults(fn=cmd_export)
+
+    s = sub.add_parser("index", help="one HTML page listing every evidence folder found under DIRS")
+    s.add_argument("dirs", nargs="*", default=["evidence"])
+    s.add_argument("--out", "-o", default="evidence-index.html")
+    s.set_defaults(fn=cmd_index)
 
     s = sub.add_parser("sign", help="sign manifest.sha256 with an SSH key (+ optional RFC 3161 timestamp)")
     s.add_argument("dir", nargs="?", default="evidence/record")
