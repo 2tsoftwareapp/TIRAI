@@ -1,5 +1,9 @@
 import json
+import os
 import subprocess
+import sys
+
+import pytest
 
 from tirai import bootstrap, system
 
@@ -10,6 +14,7 @@ def _ffmpeg(path, version):
     return path
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="fake ffmpeg is a shell script")
 def test_ffmpeg_bin_picks_new_enough_copy_anywhere_on_path(tmp_path, monkeypatch):
     old, new = tmp_path / "old", tmp_path / "new"
     old.mkdir(), new.mkdir()
@@ -20,7 +25,7 @@ def test_ffmpeg_bin_picks_new_enough_copy_anywhere_on_path(tmp_path, monkeypatch
     monkeypatch.delenv("FFPROBE_BIN", raising=False)
     monkeypatch.setattr(system, "TIRAI_BIN", tmp_path / "none")
     monkeypatch.setattr(system, "_ffmpeg_dirs", lambda: [])
-    monkeypatch.setenv("PATH", f"{old}:{new}")
+    monkeypatch.setenv("PATH", f"{old}{os.pathsep}{new}")
     assert system.ffmpeg_bin() == str(new / "ffmpeg")
     assert system.ffprobe_bin() == str(new / "ffprobe")
     assert system.tool_env()["PATH"].startswith(str(new))
