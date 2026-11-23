@@ -6,13 +6,14 @@ record:  same flow, one MP4 per contiguous tab block, plus timeline.json for `ti
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
 from tirai import db as dbq
 from tirai.bsk import Bsk, BskError
 from tirai.resources import annotate_js
-from tirai.scenario import ScenarioError, interpolate
+from tirai.scenario import ScenarioError, interpolate, render
 from tirai.system import primary_modifier
 
 DBX_DEFAULTS = {
@@ -39,6 +40,7 @@ class Runner:
         self.tabs = {}
         self.dbx_editor_ready = set()
         self.console_since = {}
+        self.vars = {}
         self.segments = []
         self.seg = None
         settings = scenario.get("settings") or {}
@@ -140,6 +142,8 @@ class Runner:
                 raise ScenarioError(f"upload file not found: {', '.join(missing)}")
             self.b.upload(tid, arg["selector"], paths)
             self.pause(1.0)
+        elif kind == "save":
+            self.save(tab, arg)
         elif kind == "dialog":
             # Pre-answer native dialogs for the rest of this page (bsk blocks on a real one).
             ok = "true" if arg == "accept" else "false"
@@ -150,6 +154,25 @@ class Runner:
             )
         else:
             raise ValueError(f"unknown action {kind}")
+
+    def save(self, tab, arg):
+        """Store text/value/attribute of an element as `{{name}}` for later steps."""
+        attr = arg.get("attribute")
+        read = f"e.getAttribute({js(attr)})" if attr else "(e.matches('input,textarea,select')?e.value:e.innerText)"
+        expr = f"(()=>{{const e=document.querySelector({js(arg['selector'])});return e?{read}:null}})()"
+        deadline = time.time() + self.expect_timeout
+        while (value := self.b.evaluate(self.tabs[tab], expr)) is None and time.time() < deadline:
+            self.pause(0.5)
+        if value is None:
+            raise ScenarioError(f"save {arg['name']}: {arg['selector']} not found")
+        value = str(value).strip()
+        if arg.get("pattern"):
+            m = re.search(arg["pattern"], value)
+            if not m:
+                raise ScenarioError(f"save {arg['name']}: pattern {arg['pattern']!r} not in {value[:80]!r}")
+            value = m.group(1) if m.groups() else m.group(0)
+        self.vars[arg["name"]] = value
+        self.saved[arg["name"]] = value
 
     def dbx_sql(self, tab, sql):
         tid = self.tabs[tab]
@@ -265,6 +288,9 @@ class Runner:
         cols = arg.get("columns")
         got = [dict(zip(cols, r, strict=False)) if cols else list(r) for r in rows]
         want = arg["rows"]
+        for name, col in (arg.get("save") or {}).items():
+            if got and cols and col in got[0]:
+                self.vars[name] = self.saved[name] = got[0][col]
 
         def norm(v):
             return json.loads(json.dumps(v, default=str))
@@ -298,6 +324,10 @@ class Runner:
         self.open_tabs()
         results = []
         for step in self.sc["steps"]:
+            self.saved = {}
+            # Titles render leniently; actions/expectations render right before use so a value saved
+            # earlier in the same step is available to the next action or check.
+            step = {**step, **render({k: step[k] for k in ("title", "subtitle") if k in step}, self.vars)}
             tab = step["tab"]
             self.ensure_segment(tab)
             rec = {
@@ -310,19 +340,23 @@ class Runner:
                 "checks": [],
             }
             print(f"[{step['id']}] {step['title']} ...", flush=True)
+            if step.get("case"):
+                rec["case"] = step["case"]
             try:
                 self.annotate(tab, [])
                 if any("no_console_errors" in e for e in step.get("expect", [])):
                     self.console_since[tab] = self.console_cursor(tab)
                 for action in step.get("actions", []):
-                    self.do_action(tab, action)
+                    self.do_action(tab, render(action, self.vars, strict=True))
                 for exp in step.get("expect", []):
-                    rec["checks"].append(self.check(tab, exp))
+                    rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
                 rec["status"] = "passed" if all(c["ok"] for c in rec["checks"]) else "failed"
                 if step.get("annotate"):
-                    rec["annotations"] = self.annotate(tab, step["annotate"])
+                    rec["annotations"] = self.annotate(tab, render(step["annotate"], self.vars, strict=True))
             except (BskError, ScenarioError, KeyError, ValueError, RuntimeError) as e:
                 rec["status"], rec["error"] = "error", str(e)
+            if self.saved:
+                rec["saved"] = dict(self.saved)
             time.sleep(step.get("hold", self.hold))
             shot = self.out / f"step-{step['id']}.png"
             try:

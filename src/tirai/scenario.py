@@ -1,5 +1,7 @@
 """Scenario loading, validation and `${ENV}` interpolation."""
 
+import copy
+import itertools
 import os
 import re
 from pathlib import Path
@@ -8,7 +10,7 @@ import yaml
 
 ACTIONS = {
     "navigate", "fill", "click", "press", "wait", "wait_for", "sql", "dbx_login",
-    "select", "hover", "scroll", "upload", "dialog",
+    "select", "hover", "scroll", "upload", "dialog", "save",
 }  # fmt: skip
 EXPECTS = {
     "visible", "not_visible", "text_contains", "text_matches", "url_contains",
@@ -25,11 +27,13 @@ REQUIRED = {
     "attribute": ("selector", "name", "equals"),
     "count": ("selector", "equals"),
     "request": ("url_contains",),
+    "save": ("name", "selector"),
 }
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
 SETTINGS = {"hold", "timing_scale", "expect_timeout"}
 DBX_KEYS = {"new_query", "editor", "password", "run_key"}
 ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
 class ScenarioError(ValueError):
@@ -47,6 +51,105 @@ def interpolate(value):
         return os.environ[m.group(1)]
 
     return ENV_RE.sub(sub, value)
+
+
+def render(value, variables, strict=False):
+    """Replace `{{name}}` from `variables` (case params, `vars:`, values saved by earlier steps).
+
+    A string that is exactly one placeholder keeps the variable's type (so `equals: "{{n}}"` stays a number).
+    Unknown names are left in place unless `strict`, so runtime variables survive load-time rendering.
+    """
+    if isinstance(value, dict):
+        return {k: render(v, variables, strict) for k, v in value.items()}
+    if isinstance(value, list):
+        return [render(v, variables, strict) for v in value]
+    if not isinstance(value, str):
+        return value
+    whole = VAR_RE.fullmatch(value.strip())
+    if whole and whole.group(1) in variables:
+        return variables[whole.group(1)]
+
+    def sub(m):
+        if m.group(1) in variables:
+            return str(variables[m.group(1)])
+        if strict:
+            raise ScenarioError(f"undefined variable {{{{{m.group(1)}}}}} (set it in vars/cases or with save)")
+        return m.group(0)
+
+    return VAR_RE.sub(sub, value)
+
+
+def _include(item, base, stack):
+    path = (base / item["include"]).resolve()
+    if path in stack:
+        raise ScenarioError(f"include cycle: {' -> '.join(p.name for p in [*stack, path])}")
+    if not path.is_file():
+        raise ScenarioError(f"include not found: {item['include']} (relative to {base})")
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    steps = data.get("steps") if isinstance(data, dict) else data
+    if not isinstance(steps, list):
+        raise ScenarioError(f"{item['include']}: expected a list of steps or a mapping with steps")
+    steps = render(_resolve(steps, path.parent, [*stack, path]), item.get("with") or {})
+    prefix = item.get("prefix", "")
+    return [
+        {**st, "id": f"{prefix}{st['id']}"} if prefix and isinstance(st, dict) and "id" in st else st for st in steps
+    ]
+
+
+def _resolve(steps, base, stack):
+    out = []
+    for st in steps:
+        if isinstance(st, dict) and "include" in st:
+            out.extend(_include(st, base, stack))
+        else:
+            out.append(st)
+    return out
+
+
+def _cases(sc):
+    if sc.get("cases") is not None and sc.get("matrix") is not None:
+        raise ScenarioError("use either cases or matrix, not both")
+    if sc.get("matrix") is not None:
+        m = sc["matrix"]
+        if not isinstance(m, dict) or not m or not all(isinstance(v, list) and v for v in m.values()):
+            raise ScenarioError("matrix: must map names to non-empty lists")
+        return [dict(zip(m, combo, strict=True)) for combo in itertools.product(*m.values())]
+    cases = sc.get("cases")
+    if cases is None:
+        return None
+    if not isinstance(cases, list) or not cases or not all(isinstance(c, dict) for c in cases):
+        raise ScenarioError("cases: must be a non-empty list of mappings")
+    return cases
+
+
+def expand(sc, base="."):
+    """Resolve `include:` steps, apply `vars:` and repeat the steps once per `cases:`/`matrix:` entry."""
+    if not isinstance(sc, dict) or not isinstance(sc.get("steps"), list):
+        return sc
+    sc = copy.deepcopy(sc)
+    variables = sc.get("vars") or {}
+    if not isinstance(variables, dict):
+        raise ScenarioError("vars: must be a mapping")
+    steps = _resolve(sc["steps"], Path(base), [])
+    cases = _cases(sc)
+    if cases is None:
+        sc["steps"] = render(steps, variables)
+        return sc
+    expanded = []
+    for n, case in enumerate(cases, 1):
+        label = str(case.get("name") or ", ".join(f"{k}={v}" for k, v in case.items()))
+        for st in steps:
+            if not isinstance(st, dict):
+                expanded.append(st)
+                continue
+            if st.get("once") and n > 1:
+                continue
+            st = render(st, {**variables, **case})
+            if not st.get("once"):
+                st = {**st, "id": f"{st.get('id')}-{n}", "title": f"[{label}] {st.get('title', '')}", "case": label}
+            expanded.append(st)
+    sc["steps"] = expanded
+    return sc
 
 
 def env_vars(scenario) -> set[str]:
@@ -188,7 +291,7 @@ def load_env_file(path):
 
 
 def load(path) -> dict:
-    sc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    sc = expand(yaml.safe_load(Path(path).read_text(encoding="utf-8")), Path(path).resolve().parent)
     problems = validate(sc)
     if problems:
         raise ScenarioError("invalid scenario:\n  - " + "\n  - ".join(problems))
