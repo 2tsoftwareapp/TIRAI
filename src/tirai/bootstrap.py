@@ -36,6 +36,16 @@ BSK_INSTALLER = "https://raw.githubusercontent.com/Tencent/BrowserSkill/main/ins
 # Override a version with TIRAI_AGENT_BROWSER_VERSION / TIRAI_DBX_VERSION (digest then comes from the release).
 AGENT_BROWSER_REPO = "vercel-labs/agent-browser"
 AGENT_BROWSER_VERSION = "0.43.0"
+AGENT_DESKTOP_REPO = "vercel-labs/agent-desktop"
+AGENT_DESKTOP_VERSION = "1.3.1"
+AGENT_DESKTOP_SHA256 = {
+    "aarch64-apple-darwin": "9b7b7cfc74892eab46c2c85d6cb7dc4863bf8dab0a222cfcfb8ae4604c69c86c",
+    "aarch64-pc-windows-msvc": "805f1f61890f9983fceaf38cda94a37a049c379435d65607db5cedd22c8ef97b",
+    "aarch64-unknown-linux-gnu": "438990a703fbeb19775596c341c3701435e80adbfa1b2f64b82ff17567d5573b",
+    "x86_64-apple-darwin": "469da10cfb68928c58caff88b92b30526e0ca895ac06bc86b7f533b1d9b309b3",
+    "x86_64-pc-windows-msvc": "6ee4b1e078f4e78792e79f16e32e4a78b9919464aa3c55629b7e27ed53a08c13",
+    "x86_64-unknown-linux-gnu": "ca77b6b75034eeb12e537dd8c0a4f2a3424119253f38b7e6bd79ba0d2fef1264",
+}
 AGENT_BROWSER_SHA256 = {
     "agent-browser-darwin-arm64": "05338a8eeddf0b3f9ebf0c87a6c21aedc10685608c68618e1a8483c43eae9c3f",
     "agent-browser-darwin-x64": "49a5ab27297213c1bc0005701a6a4542399abfc9d2cb7520ab519ebb94b8b13d",
@@ -128,6 +138,17 @@ def agent_browser_asset():
     tag = f"v{version}"
     sha = AGENT_BROWSER_SHA256.get(name) if version == AGENT_BROWSER_VERSION else None
     return release_url(AGENT_BROWSER_REPO, tag, name), sha or (lambda: release_digest(AGENT_BROWSER_REPO, tag, name))
+
+
+def agent_desktop_asset():
+    """(url, sha256 or digest lookup) of the agent-desktop CLI archive for this OS/arch."""
+    osname, arch = platform_arch()
+    cpu = "aarch64" if arch == "arm64" else "x86_64"
+    triple = f"{cpu}-" + {"linux": "unknown-linux-gnu", "macos": "apple-darwin", "windows": "pc-windows-msvc"}[osname]
+    version = os.environ.get("TIRAI_AGENT_DESKTOP_VERSION") or AGENT_DESKTOP_VERSION
+    tag, name = f"v{version}", f"agent-desktop-v{version}-{triple}.tar.gz"
+    sha = AGENT_DESKTOP_SHA256.get(triple) if version == AGENT_DESKTOP_VERSION else None
+    return release_url(AGENT_DESKTOP_REPO, tag, name), sha or (lambda: release_digest(AGENT_DESKTOP_REPO, tag, name))
 
 
 def dbx_asset(version):
@@ -303,6 +324,53 @@ class Setup:
         else:
             print(f"  installed {ffmpeg_bin()} ({ver[0]}.{ver[1]})")
 
+    def agent_desktop(self):
+        """Desktop-app driver (tabs with `app:`); opt-in with `tirai setup --only agent-desktop`."""
+        import tarfile
+
+        from tirai.desktop import desktop_bin
+
+        print("- agent-desktop (desktop apps through the accessibility tree)")
+        found = desktop_bin()
+        if not found:
+            url, sha = agent_desktop_asset()
+            if not self.confirm(f"download agent-desktop into {TIRAI_BIN}"):
+                self.problems.append("agent-desktop: not installed")
+                return
+            print(f"  (from {url})")
+            if self.dry_run:
+                return
+            with tempfile.TemporaryDirectory() as tmp:
+                try:
+                    archive = fetch_verified(url, Path(tmp) / "agent-desktop.tar.gz", sha() if callable(sha) else sha)
+                except VerifyError as e:
+                    self.problems.append(f"agent-desktop: {e}")
+                    return
+                TIRAI_BIN.mkdir(parents=True, exist_ok=True)
+                with tarfile.open(archive) as t:
+                    for m in t.getmembers():
+                        if m.isfile() and Path(m.name).name.startswith("agent-desktop"):
+                            dest = TIRAI_BIN / Path(m.name).name
+                            dest.write_bytes(t.extractfile(m).read())
+                            dest.chmod(0o755)
+            found = desktop_bin()
+            if not found:
+                self.problems.append("agent-desktop: archive did not contain the binary")
+                return
+        print(f"  ok ({found})")
+        st = run_text([found, "status"], timeout=30)
+        try:
+            perm = json.loads(st.stdout.strip().splitlines()[-1])["data"]["permissions"]["accessibility"]
+        except (ValueError, KeyError, IndexError):
+            perm = {}
+        if perm.get("state") != "granted":
+            print(
+                f"  accessibility: {perm.get('state', 'unknown')} - "
+                f"{perm.get('suggestion', 'run `agent-desktop status`')}"
+            )
+            if IS_MAC:
+                print("  grant Accessibility and Screen Recording to your terminal in System Settings > Privacy")
+
     def agent_browser(self):
         print("- agent-browser (default browser driver)")
         found = agent_browser_bin()
@@ -472,8 +540,8 @@ class Setup:
         print("  install 'BrowserSkill' from the Chrome Web Store / Edge Add-ons and enable it (manual step)")
 
 
-STEPS = ("ffmpeg", "agent-browser", "dbx", "browserskill", "skills", "ocr", "voice")
-OPT_IN = {"ocr", "voice"}  # only with --only: tesseract (OCR PII scan) and a speech engine (--voice)
+STEPS = ("ffmpeg", "agent-browser", "dbx", "browserskill", "skills", "ocr", "voice", "agent-desktop")
+OPT_IN = {"ocr", "voice", "agent-desktop"}  # only with --only: tesseract (OCR PII scan) and a speech engine (--voice)
 
 
 def agent_browser_state(exe):
@@ -524,6 +592,8 @@ def run(agents=None, project=None, yes=False, dry_run=False, skip=(), only=()):
         s.skills(agents if agents is not None else detect_agents(), project, "browserskill" not in skip)
     if "browserskill" not in skip and bsk_bin():
         s.browserskill_extension()
+    if "agent-desktop" not in skip:
+        s.agent_desktop()
     if "ocr" not in skip:
         s.package("tesseract (OCR scan for PII)", ["tesseract"], lambda: bool(tesseract_bin()))
     if "voice" not in skip:

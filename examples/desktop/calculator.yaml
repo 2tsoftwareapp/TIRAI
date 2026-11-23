@@ -1,0 +1,25 @@
+name: Calculator adds two numbers
+tabs:
+  calc:
+    app: gnome-calculator
+    label: Calculator
+steps:
+  - id: S1
+    title: Enter 7 + 8
+    tab: calc
+    subtitle: "Step 1: type 7 + 8 with the keypad"
+    actions:
+      - click: "button:7"
+      - click: "button:+"
+      - click: "button:8"
+    expect:
+      - text_contains: {selector: {role: textfield}, text: "7+8"}
+  - id: S2
+    title: Result is 15
+    tab: calc
+    subtitle: "Step 2: press = and the calculator shows 15"
+    actions:
+      - click: "button:="
+      - wait: 2000
+    expect:
+      - text_contains: {selector: {role: textfield}, text: "15"}

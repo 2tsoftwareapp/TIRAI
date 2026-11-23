@@ -250,8 +250,8 @@ def validate(sc) -> list[str]:
         errors.append("tabs: at least one tab is required")
         tabs = {}
     for name, cfg in tabs.items():
-        if not isinstance(cfg, dict) or not cfg.get("url"):
-            errors.append(f"tabs.{name}: url is required")
+        if not isinstance(cfg, dict) or not (cfg.get("url") or cfg.get("app")):
+            errors.append(f"tabs.{name}: url (web page) or app (desktop app) is required")
             continue
         for key in cfg.get("dbx") or {}:
             if key not in DBX_KEYS:

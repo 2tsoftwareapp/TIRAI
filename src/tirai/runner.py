@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from tirai import db as dbq
 from tirai.agentbrowser import make_driver
 from tirai.bsk import DriverError
+from tirai.desktop import MixedDriver, is_desktop
 from tirai.resources import annotate_js
 from tirai.scenario import ScenarioError, interpolate, render
 from tirai.system import primary_modifier
@@ -48,7 +49,10 @@ class Runner:
         self.sc = scenario
         self.out = out
         self.scope = scope
-        self.b = make_driver(driver or scenario.get("driver"), session)
+        if any("app" in (cfg or {}) for cfg in scenario["tabs"].values()):
+            self.b = MixedDriver(lambda: make_driver(driver or scenario.get("driver"), session))
+        else:
+            self.b = make_driver(driver or scenario.get("driver"), session)
         self.record = record
         self.hold = hold
         self.stop_on_fail = stop_on_fail
@@ -88,9 +92,15 @@ class Runner:
             raise RuntimeError(f"dbx.connect {conn['name']}: {e}") from None
 
     def open_tabs(self):
-        for i, (name, cfg) in enumerate(self.sc["tabs"].items()):
+        for name, cfg in self.sc["tabs"].items():
+            if "app" in cfg:
+                self.tabs[name] = self.b.desk.launch(name, {**cfg, "app": interpolate(cfg["app"])})
+                self.pause(1.0)
+                for action in cfg.get("setup", []):
+                    self.do_action(name, action)
+                continue
             self.provision_dbx(cfg)
-            if i == 0 and not self.b.session:
+            if not self.b.session:
                 self.tabs[name] = self.b.open_session(interpolate(cfg["url"]), self.scope)
             else:
                 self.tabs[name] = self.b.tab_create(interpolate(cfg["url"]))
@@ -241,6 +251,11 @@ class Runner:
             rec.setdefault("idle", []).append([round(t0 + 0.3, 3), round(t1 - 0.2, 3), speed])
 
     def target_rect(self, tab, selector):
+        if is_desktop(self.tabs[tab]):
+            try:
+                return self.b.desk.rect(self.tabs[tab], selector)
+            except DriverError:
+                return None
         try:
             return self.b.evaluate(
                 self.tabs[tab],
@@ -253,10 +268,14 @@ class Runner:
     def zoom_rect(self, tab, zoom):
         """Viewport rect of the zoom target, consumed by `tirai compose` to ease in on it."""
         z = {"target": zoom} if isinstance(zoom, str) else dict(zoom)
-        rect = self.b.evaluate(
-            self.tabs[tab],
-            f"(()=>{{const e=document.querySelector({js(z['target'])});if(!e)return null;"
-            "const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height,innerWidth,innerHeight]})()",
+        rect = (
+            self.target_rect(tab, z["target"])
+            if is_desktop(self.tabs[tab])
+            else self.b.evaluate(
+                self.tabs[tab],
+                f"(()=>{{const e=document.querySelector({js(z['target'])});if(!e)return null;"
+                "const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height,innerWidth,innerHeight]})()",
+            )
         )
         if not rect:
             raise ScenarioError(f"zoom target not found: {z['target']}")
@@ -291,6 +310,13 @@ class Runner:
             return self.check_db(arg)
         if kind == "no_console_errors":
             return self.check_console(tab, arg)
+        if is_desktop(tid):
+            deadline = time.time() + self.expect_timeout
+            while True:
+                ok, actual = self.b.desk.check(tid, kind, arg)
+                if ok or time.time() > deadline:
+                    return {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok)}
+                self.pause(0.5)
         q = "document.querySelector"
         if kind == "visible":
             expr = (
@@ -419,11 +445,15 @@ class Runner:
     def apply_privacy(self, tab):
         """(Re)install auto PII masking in the tab; it keeps masking as the DOM changes until the next load."""
         cfg = self.privacy_config()
-        if not cfg or self.sc["tabs"][tab].get("privacy") is False:
+        if not cfg or self.sc["tabs"][tab].get("privacy") is False or is_desktop(self.tabs[tab]):
             return
         self.b.evaluate(self.tabs[tab], annotate_js() + f";__ann.mask({js(cfg)})")
 
     def annotate(self, tab, items):
+        if is_desktop(self.tabs[tab]):
+            if items:
+                raise ScenarioError("annotate: is only available on browser tabs")
+            return []
         calls = ["__ann.clear()"]
         for item in items or []:
             ((kind, a),) = item.items()
