@@ -145,15 +145,45 @@ def cmd_export(args):
         print(f"wrote {path}")
     if (rec / report.MANIFEST).is_file():
         report.write_manifest(rec)
+        if (rec / (report.MANIFEST + ".sig")).is_file():
+            print("manifest changed: run `tirai sign` again")
+    return 0
+
+
+def cmd_sign(args):
+    from tirai import sign
+
+    key = args.key or os.environ.get("TIRAI_SIGN_KEY")
+    if not key:
+        print("pass --key (an SSH private key, e.g. ~/.ssh/id_ed25519) or set TIRAI_SIGN_KEY")
+        return 2
+    try:
+        for path in sign.sign(args.dir, key, tsa=args.tsa or os.environ.get("TIRAI_TSA_URL")):
+            print(f"wrote {path}")
+    except sign.SignError as e:
+        print(f"error: {e}")
+        return 1
     return 0
 
 
 def cmd_verify(args):
-    from tirai import report
+    from tirai import report, sign
 
     problems = report.verify(args.dir)
+    notes = []
+    try:
+        for check in (
+            sign.verify_signature(args.dir, args.pubkey, args.allowed_signers, args.identity),
+            sign.verify_timestamp(args.dir, args.tsa_ca),
+        ):
+            problems += check[0]
+            notes += check[1]
+    except sign.SignError as e:
+        problems.append(str(e))
     for p in problems:
         print(p)
+    for n in notes:
+        print(n)
     print("evidence intact" if not problems else f"{len(problems)} problem(s)")
     return 1 if problems else 0
 
@@ -409,8 +439,20 @@ def build_parser():
     s.add_argument("--case-id", help="TestRail: case id (e.g. C123) for every row")
     s.set_defaults(fn=cmd_export)
 
-    s = sub.add_parser("verify", help="check an evidence folder against its manifest.sha256")
+    s = sub.add_parser("sign", help="sign manifest.sha256 with an SSH key (+ optional RFC 3161 timestamp)")
     s.add_argument("dir", nargs="?", default="evidence/record")
+    s.add_argument("--key", help="SSH private key (default $TIRAI_SIGN_KEY)")
+    s.add_argument(
+        "--tsa", nargs="?", const=True, help="add an RFC 3161 timestamp (default TSA freetsa.org, or give a URL)"
+    )
+    s.set_defaults(fn=cmd_sign)
+
+    s = sub.add_parser("verify", help="check an evidence folder against its manifest.sha256 (and signature)")
+    s.add_argument("dir", nargs="?", default="evidence/record")
+    s.add_argument("--pubkey", help="trusted SSH public key the manifest must be signed with")
+    s.add_argument("--allowed-signers", help="ssh allowed_signers file (with --identity)")
+    s.add_argument("--identity", default="tirai", help="signer identity in the allowed_signers file")
+    s.add_argument("--tsa-ca", help="TSA CA certificate to verify the timestamp chain")
     s.set_defaults(fn=cmd_verify)
 
     def trace_opts(s):

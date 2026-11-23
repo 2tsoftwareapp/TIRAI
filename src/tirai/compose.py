@@ -305,7 +305,19 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None):
     report.write_xlsx(rec_dir, tl, final.name)
     export.write(rec_dir, tl, ("junit",), video=final.name)
     report.write_manifest(rec_dir)
+    _resign(rec_dir)
     return final, t
+
+
+def _resign(rec_dir):
+    """A new manifest invalidates any old signature: re-sign with $TIRAI_SIGN_KEY or drop the stale files."""
+    from tirai import sign
+
+    if key := os.environ.get("TIRAI_SIGN_KEY"):
+        sign.sign(rec_dir, key, tsa=os.environ.get("TIRAI_TSA_URL"))
+        return
+    for name in (sign.SIG, sign.PUB, sign.TSR):
+        (Path(rec_dir) / name).unlink(missing_ok=True)
 
 
 def report_md(tl, video_name):
