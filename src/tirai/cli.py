@@ -143,6 +143,13 @@ def cmd_capture(args):
     return cmd_from_trace(args)
 
 
+def cmd_mcp(_args):
+    from tirai.mcp import serve
+
+    serve()
+    return 0
+
+
 def cmd_init(args):
     dest = Path(args.path)
     if dest.exists() and not args.force:
@@ -266,6 +273,7 @@ def build_parser():
     trace_opts(s)
     s.set_defaults(fn=cmd_capture)
 
+    sub.add_parser("mcp", help="run the TIRAI MCP server on stdio (for MCP-capable agents)").set_defaults(fn=cmd_mcp)
     sub.add_parser("annotate-js", help="print the path of the injectable annotate.js").set_defaults(fn=cmd_asset)
     return p
 
