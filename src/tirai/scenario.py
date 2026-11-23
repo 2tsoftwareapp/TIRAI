@@ -32,7 +32,8 @@ REQUIRED = {
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
 SETTINGS = {"hold", "timing_scale", "expect_timeout"}
 PII_RULES = {"email", "phone", "card", "token"}
-PRIVACY_KEYS = {"mask", "patterns", "selectors", "keep", "inputs"}
+PRIVACY_KEYS = {"mask", "patterns", "selectors", "keep", "inputs", "ocr"}
+OCR_MODES = {"off", "warn", "fix", "fail"}
 DBX_KEYS = {"new_query", "editor", "password", "run_key", "connect", "error"}
 DBX_CONNECT_KEYS = {"name", "database", "host", "password_env"}
 ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -218,6 +219,8 @@ def _check_privacy(p, errors):
     for rule in p.get("mask") or []:
         if rule not in PII_RULES:
             errors.append(f"privacy.mask: unknown rule {rule!r} (allowed: {', '.join(sorted(PII_RULES))})")
+    if p.get("ocr") is not None and p["ocr"] not in OCR_MODES:
+        errors.append(f"privacy.ocr: must be one of {', '.join(sorted(OCR_MODES))}")
     for pat in p.get("patterns") or []:
         try:
             re.compile(str(pat))

@@ -171,6 +171,37 @@ def cmd_sign(args):
     return 0
 
 
+def cmd_scan_pii(args):
+    import json
+
+    from tirai import ocr, report
+
+    rec = Path(args.dir)
+    video = rec / "final.mp4" if rec.is_dir() else rec
+    rec = video.parent
+    tl_file = rec / "timeline.final.json"
+    priv = json.loads(tl_file.read_text(encoding="utf-8")).get("privacy", {}) if tl_file.is_file() else {}
+    mask = [m for item in args.rules for m in item.split(",") if m] or priv.get("mask")
+    try:
+        hits = ocr.scan(video, mask, args.pattern or priv.get("patterns"), args.keep or priv.get("keep") or (),
+                        every=args.every, lang=args.lang)  # fmt: skip
+        for h in hits:
+            print(f"{h['t']:7.1f}s  {h['text']:<28} box {h['box']}")
+        print(f"{len(hits)} possible PII hit(s) in {video.name}")
+        if hits and args.fix:
+            n = ocr.redact(video, hits, every=args.every)
+            print(f"blurred {n} region(s); rewrote {video.name}")
+            if (rec / report.MANIFEST).is_file():
+                report.write_manifest(rec)
+                if (rec / (report.MANIFEST + ".sig")).is_file():
+                    print("manifest changed: run `tirai sign` again")
+            return 0
+    except RuntimeError as e:
+        print(f"error: {e}")
+        return 2
+    return 1 if hits else 0
+
+
 def cmd_index(args):
     from tirai import index
 
@@ -476,6 +507,16 @@ def build_parser():
     s.add_argument("--project-key", help="Xray: Jira project key for a new test")
     s.add_argument("--case-id", help="TestRail: case id (e.g. C123) for every row")
     s.set_defaults(fn=cmd_export)
+
+    s = sub.add_parser("scan-pii", help="OCR the final video for PII the page masking missed (--fix blurs it)")
+    s.add_argument("dir", nargs="?", default="evidence/record", help="evidence folder or a video file")
+    s.add_argument("--rules", action="extend", nargs="+", default=[], help="email, phone, card, token (default all)")
+    s.add_argument("--pattern", action="append", help="extra regex (repeatable)")
+    s.add_argument("--keep", action="append", help="exact text allowed to stay visible (repeatable)")
+    s.add_argument("--every", type=float, default=1.0, help="seconds between sampled frames")
+    s.add_argument("--lang", help="tesseract language(s), e.g. eng+vie")
+    s.add_argument("--fix", action="store_true", help="blur every hit in the video and refresh the manifest")
+    s.set_defaults(fn=cmd_scan_pii)
 
     s = sub.add_parser("index", help="one HTML page listing every evidence folder found under DIRS")
     s.add_argument("dirs", nargs="*", default=["evidence"])

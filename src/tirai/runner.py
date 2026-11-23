@@ -36,6 +36,11 @@ def _origin(url):
     return f"{u.scheme}://{u.netloc}"
 
 
+def _privacy_summary(cfg):
+    """What the OCR pass needs from `privacy:` (rules, patterns, keep, mode); selectors stay out."""
+    return {k: cfg[k] for k in ("mask", "patterns", "keep", "ocr") if cfg.get(k) is not None}
+
+
 class Runner:
     def __init__(
         self, scenario, out, session=None, record=False, hold=0.3, stop_on_fail=False, scope="tirai", driver=None
@@ -490,6 +495,7 @@ def run(scenario, out_dir, record, session=None, scope="tirai", hold=None, drive
         **({"lang": scenario["lang"]} if scenario.get("lang") else {}),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "driver": r.b.name,
+        **({"privacy": _privacy_summary(r.privacy_config())} if scenario.get("privacy") else {}),
         "tabs": {k: {"label": v.get("label", k)} for k, v in scenario["tabs"].items()},
         "segments": r.segments,
         "steps": steps,

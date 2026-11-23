@@ -236,6 +236,26 @@ def audio_seconds(path):
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
 
 
+def ocr_check(final, tl):
+    """`privacy.ocr`: warn (default when tesseract is installed), fix (blur hits), fail, or off."""
+    from tirai import ocr
+    from tirai.system import tesseract_bin
+
+    priv = tl.get("privacy")
+    mode = (priv or {}).get("ocr", "warn")
+    if not priv or mode == "off" or (mode == "warn" and not tesseract_bin()):
+        return
+    hits = ocr.scan(final, priv.get("mask"), priv.get("patterns"), priv.get("keep") or ())
+    tl["ocr"] = {"mode": mode, "hits": hits}
+    for h in hits:
+        print(f"ocr: possible PII {h['text']} at {h['t']:.1f}s box {h['box']}")
+    if hits and mode == "fix":
+        tl["ocr"]["blurred_regions"] = ocr.redact(final, hits)
+        print(f"ocr: blurred {tl['ocr']['blurred_regions']} region(s) in {final.name}")
+    elif hits and mode == "fail":
+        raise RuntimeError(f"ocr found {len(hits)} possible PII hit(s) in {final.name} (privacy.ocr: fail)")
+
+
 def chapters_file(tmp, tl, title_seconds):
     lines = [";FFMETADATA1", f"title={tl['scenario']}", "", "[CHAPTER]", "TIMEBASE=1/1000", "START=0"]
     lines += [f"END={int(title_seconds * 1000)}", "title=Title", ""]
@@ -343,6 +363,7 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
         )
         if voice:
             tl["voiceover"] = add_voiceover(tmpd, final, tl, voice, langs[0])
+    ocr_check(final, tl)
 
     (rec_dir / "report.md").write_text(report_md(tl, final.name), encoding="utf-8")
     (rec_dir / "timeline.final.json").write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")

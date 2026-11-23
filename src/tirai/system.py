@@ -43,6 +43,11 @@ def platform_arch():
     return osname, "arm64" if machine in ("arm64", "aarch64") else "x64"
 
 
+def tesseract_bin():
+    extra = [Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Tesseract-OCR"] if IS_WINDOWS else []
+    return find_bin("tesseract", "TESSERACT_BIN", extra)
+
+
 def agent_browser_bin():
     return find_bin("agent-browser", "AGENT_BROWSER_BIN", [TIRAI_BIN, HOME / ".local" / "bin"])
 

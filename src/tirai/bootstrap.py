@@ -9,7 +9,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from tirai import install
+from tirai import install, tts
 from tirai.system import (
     DBX_IMAGE,
     HOME,
@@ -28,6 +28,7 @@ from tirai.system import (
     find_font,
     platform_arch,
     run_text,
+    tesseract_bin,
 )
 
 BSK_INSTALLER = "https://raw.githubusercontent.com/Tencent/BrowserSkill/main/install.{ext}"
@@ -161,7 +162,7 @@ def _sudo():
 def package_install_cmd(packages):
     """Command that installs `packages` with the platform package manager, or None."""
     if IS_WINDOWS:
-        ids = {"ffmpeg": "Gyan.FFmpeg"}
+        ids = {"ffmpeg": "Gyan.FFmpeg", "tesseract": "UB-Mannheim.TesseractOCR"}
         if shutil.which("winget"):
             return [
                 "winget",
@@ -188,13 +189,20 @@ def package_install_cmd(packages):
         "apk": ["apk", "add"],
     }
     names = {
+        "tesseract": {
+            "apt-get": "tesseract-ocr",
+            "dnf": "tesseract",
+            "pacman": "tesseract",
+            "zypper": "tesseract-ocr",
+            "apk": "tesseract-ocr",
+        },
         "fonts": {
             "apt-get": "fonts-dejavu-core",
             "dnf": "dejavu-sans-fonts",
             "pacman": "ttf-dejavu",
             "zypper": "dejavu-fonts",
             "apk": "font-dejavu",
-        }
+        },
     }
     for pm, cmd in linux.items():
         if shutil.which(pm):
@@ -464,7 +472,8 @@ class Setup:
         print("  install 'BrowserSkill' from the Chrome Web Store / Edge Add-ons and enable it (manual step)")
 
 
-STEPS = ("ffmpeg", "agent-browser", "dbx", "browserskill", "skills")
+STEPS = ("ffmpeg", "agent-browser", "dbx", "browserskill", "skills", "ocr", "voice")
+OPT_IN = {"ocr", "voice"}  # only with --only: tesseract (OCR PII scan) and a speech engine (--voice)
 
 
 def agent_browser_state(exe):
@@ -498,6 +507,8 @@ def run(agents=None, project=None, yes=False, dry_run=False, skip=(), only=()):
     s = Setup(yes=yes, dry_run=dry_run)
     if only:
         skip = set(skip) | (set(STEPS) - set(only))
+    else:
+        skip = set(skip) | OPT_IN
     print(f"TIRAI setup ({sys.platform})")
     if "ffmpeg" not in skip:
         s.ffmpeg()
@@ -513,6 +524,13 @@ def run(agents=None, project=None, yes=False, dry_run=False, skip=(), only=()):
         s.skills(agents if agents is not None else detect_agents(), project, "browserskill" not in skip)
     if "browserskill" not in skip and bsk_bin():
         s.browserskill_extension()
+    if "ocr" not in skip:
+        s.package("tesseract (OCR scan for PII)", ["tesseract"], lambda: bool(tesseract_bin()))
+    if "voice" not in skip:
+        if IS_MAC or IS_WINDOWS:
+            print("- speech engine\n  ok (built into the OS)")
+        else:
+            s.package("espeak-ng (voice-over)", ["espeak-ng"], lambda: bool(tts.available("espeak")))
     if s.problems:
         print("\nsetup incomplete:\n  - " + "\n  - ".join(s.problems))
         return 1
