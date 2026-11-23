@@ -180,6 +180,13 @@ def _sudo():
     return ["sudo"] if shutil.which("sudo") else []
 
 
+def sudo_ready():
+    """sudo can run now: a terminal to type the password in, or cached/passwordless sudo."""
+    if sys.stdin.isatty():
+        return True
+    return subprocess.run(["sudo", "-n", "true"], capture_output=True, check=False).returncode == 0
+
+
 def package_install_cmd(packages):
     """Command that installs `packages` with the platform package manager, or None."""
     if IS_WINDOWS:
@@ -248,6 +255,9 @@ class Setup:
         print("  $ " + " ".join(str(c) for c in cmd))
         if self.dry_run:
             return True
+        if cmd[0] == "sudo" and not sudo_ready():
+            print("  skipped: sudo needs a password and there is no terminal; run the command above yourself")
+            return False
         if "apt-get" in cmd[:2]:
             subprocess.run([*cmd[: cmd.index("apt-get")], "apt-get", "update"], check=False)
         return subprocess.run(cmd, check=False).returncode == 0

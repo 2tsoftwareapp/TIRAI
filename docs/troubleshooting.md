@@ -14,6 +14,8 @@
 | ffmpeg installed by winget but not found | open a new terminal, or set `FFMPEG_BIN`; TIRAI also checks `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links` |
 | Linux package install asks for a sudo password | run the printed `sudo ...` command yourself, then `tirai setup` again |
 | DBX step fails with "no connection selected" or the grid is missing | DBX has several connections and the editor has none selected; set `tabs.<db>.dbx.connection` (or use `dbx.connect`, whose name is selected) |
+| `tirai dbx -d` says port 4224 is used by another service | it starts DBX on the next free port and prints it; set `DBX_URL` (or `--port` / `DBX_PORT`) to that port for scenarios |
+| `setup` skips a step with "sudo needs a password" | no terminal for the sudo prompt (agent shell); run the printed command yourself, or rerun `tirai setup` in a terminal |
 | DBX query does not run on macOS | the run shortcut defaults to `Meta+Enter`; override with `tabs.<db>.dbx.run_key` |
 | Steps flaky on a slow machine | `TIRAI_TIMING_SCALE=2` |
 | Subtitles missing Vietnamese glyphs | set `TIRAI_FONT` (and `TIRAI_FONT_BOLD`) to a Unicode .ttf |
