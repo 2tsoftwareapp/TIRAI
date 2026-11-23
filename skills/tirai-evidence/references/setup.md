@@ -15,6 +15,10 @@ It installs, with the OS package manager or official installer:
 4. BrowserSkill CLI (`bsk`) — Tencent's official `install.sh` / `install.ps1` into `~/.local/bin`.
 5. The `tirai-evidence` skill for detected agents, plus BrowserSkill's own skill for Claude Code, Codex, Cursor.
 
+Opt-in (only when the scenario needs them): `tirai setup --only ocr` (tesseract, for `privacy.ocr` /
+`tirai scan-pii`), `--only voice` (espeak-ng on Linux; macOS `say` and Windows SAPI are built in) and
+`--only agent-desktop` (desktop-app tabs with `app:`).
+
 Manual steps the user must do (ask them; never automate):
 
 - Only for `driver: bsk`: install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons.

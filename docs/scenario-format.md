@@ -64,7 +64,7 @@ steps: [...]
 | `count` | `count: { selector: "table tbody tr", equals: 3 }` |
 | `request` | `request: { url_contains: "/api/orders", status: 201 }` (any page or XHR/fetch request seen by the page; `status` optional) |
 | `no_console_errors` | `no_console_errors: {}` or `{ ignore: ["favicon"] }` (console errors/exceptions raised during this step) |
-| `db` | `db: { sql: "SELECT status FROM users WHERE id=2", columns: [status], rows: [{status: LOCKED}] }` |
+| `db` | `db: { sql: "SELECT status FROM users WHERE id=2", rows: [{status: LOCKED}] }` (`columns:` defaults to the keys of the first expected row, in SELECT order) |
 
 DOM checks retry for up to 6 s. `db` runs read-only against `databases.<name>.dsn` (default `default`),
 independently of what the DBX tab shows: DBX draws its result grid on a canvas, so its cells are not DOM text.

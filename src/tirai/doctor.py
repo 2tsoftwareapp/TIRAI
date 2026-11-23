@@ -58,6 +58,18 @@ def checks():
     for mod, extra in (("psycopg", "postgres"), ("pymysql", "mysql")):
         found = importlib.util.find_spec(mod) is not None
         yield f"{mod} (expect: db)", found, "installed" if found else f"optional: pip install 'tirai[{extra}]'", False
+    from tirai.desktop import desktop_bin
+    from tirai.ocr import tesseract_bin
+    from tirai.system import IS_WINDOWS
+
+    tess = tesseract_bin()
+    yield "tesseract (OCR scan)", bool(tess), tess or "optional: `tirai setup --only ocr`", False
+    voice = find_bin("espeak-ng") or find_bin("espeak") or find_bin("say") or ("SAPI" if IS_WINDOWS else None)
+    yield "voice (--voice)", bool(voice), voice or "optional: `tirai setup --only voice` or TIRAI_TTS_CMD", False
+    desk = desktop_bin()
+    yield "agent-desktop (app: tabs)", bool(desk), desk or "optional: `tirai setup --only agent-desktop`", False
+    keygen = find_bin("ssh-keygen")
+    yield "ssh-keygen (tirai sign)", bool(keygen), keygen or "optional: OpenSSH client", False
     docker = find_bin("docker")
     yield "docker (demo stack)", bool(docker), docker or "optional, for examples/demo", False
 

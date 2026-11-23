@@ -29,8 +29,14 @@ def run_info(d):
     has_manifest = (d / report.MANIFEST).is_file()
     problems = report.verify(d) if has_manifest else []
     integrity = "no manifest" if not has_manifest else ("modified" if problems else "intact")
-    if has_manifest and not problems and (d / (report.MANIFEST + ".sig")).is_file():
-        integrity = "intact, signed"
+    if has_manifest and (d / (report.MANIFEST + ".sig")).is_file():
+        from tirai import sign
+
+        bad_sig, _ = sign.verify_signature(d)
+        if bad_sig:
+            integrity = "modified (bad signature)"
+        elif not problems:
+            integrity = "intact, signed"
     videos = sorted(p.name for p in d.glob("final*.mp4"))
     return {
         "dir": d,

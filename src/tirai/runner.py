@@ -401,9 +401,9 @@ class Runner:
     def check_db(self, arg):
         db = self.sc["databases"][arg.get("database", "default")]
         rows = dbq.query(interpolate(db["dsn"]), arg["sql"])
-        cols = arg.get("columns")
-        got = [dict(zip(cols, r, strict=False)) if cols else list(r) for r in rows]
         want = arg["rows"]
+        cols = arg.get("columns") or (list(want[0]) if want and isinstance(want[0], dict) else None)
+        got = [dict(zip(cols, r, strict=False)) if cols else list(r) for r in rows]
         for name, col in (arg.get("save") or {}).items():
             if got and cols and col in got[0]:
                 self.vars[name] = self.saved[name] = got[0][col]
