@@ -7,7 +7,8 @@ Env: TIRAI_REPO, TIRAI_REF, TIRAI_SOURCE (local checkout or archive URL), TIRAI_
      TIRAI_SETUP_ARGS (extra `tirai setup` args when piping into iex, e.g. "--yes --agent claude").
 #>
 $ErrorActionPreference = 'Stop'
-$SetupArgs = @($args)
+# PowerShell turns unquoted `a,b` into an array; pass it on as one comma-separated argument.
+$SetupArgs = @($args | ForEach-Object { if ($_ -is [array]) { $_ -join ',' } else { "$_" } })
 if ($env:TIRAI_SETUP_ARGS) { $SetupArgs += ($env:TIRAI_SETUP_ARGS -split '\s+' | Where-Object { $_ }) }
 
 $Repo = if ($env:TIRAI_REPO) { $env:TIRAI_REPO } else { '2tsoftwareapp/TIRAI' }

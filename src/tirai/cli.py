@@ -139,7 +139,9 @@ def build_parser():
         help="agents to install the skill for (default: detected ones)",
     )
     s.add_argument("--project", help="install skills into this project instead of the user profile")
-    s.add_argument("--skip", action="append", default=[], help="comma list: ffmpeg, browserskill, skills")
+    s.add_argument(
+        "--skip", action="extend", nargs="+", default=[], help="ffmpeg, browserskill, skills (comma or space separated)"
+    )
     s.add_argument("--yes", "-y", action="store_true", help="install without prompting")
     s.add_argument("--dry-run", action="store_true", help="print what would be installed")
     s.set_defaults(fn=cmd_setup)
