@@ -1,6 +1,7 @@
 """`tirai` command line."""
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -70,7 +71,11 @@ def cmd_run(args):
         print(e)
         return 1
     out = Path(args.out) / ("record" if args.record else "dry-run")
-    tl = runner.run(sc, out, record=args.record, session=args.session, scope=args.scope, hold=args.hold)
+    if args.headed:
+        os.environ["TIRAI_HEADED"] = "1"
+    tl = runner.run(
+        sc, out, record=args.record, session=args.session, scope=args.scope, hold=args.hold, driver=args.driver
+    )
     print(f"timeline: {out / 'timeline.json'}")
     return _summary(tl)
 
@@ -143,6 +148,48 @@ def cmd_capture(args):
     return cmd_from_trace(args)
 
 
+def cmd_dbx(args):
+    import subprocess
+    import time
+    import urllib.request
+
+    from tirai.bootstrap import DBX_IMAGE
+    from tirai.system import TIRAI_HOME, dbx_web_bin, dbx_web_dir, find_bin
+
+    url = f"http://127.0.0.1:{args.port}/"
+    binary = dbx_web_bin()
+    if binary:
+        env = {**os.environ, "DBX_PORT": str(args.port), "DBX_PACKAGE_ROOT": str(dbx_web_dir())}
+        env.setdefault("DBX_DATA_DIR", str(TIRAI_HOME / "dbx-data"))
+        Path(env["DBX_DATA_DIR"]).mkdir(parents=True, exist_ok=True)
+        if not args.detach:
+            print(f"DBX web: {url} (Ctrl+C to stop)")
+            return subprocess.call([binary], env=env, cwd=str(dbx_web_dir()))
+        log = open(TIRAI_HOME / "dbx.log", "ab")  # noqa: SIM115 - handed to the detached process
+        flags = {"creationflags": 0x00000008} if os.name == "nt" else {"start_new_session": True}
+        subprocess.Popen([binary], env=env, cwd=str(dbx_web_dir()), stdout=log, stderr=log, **flags)
+    else:
+        docker = find_bin("docker")
+        if not docker:
+            print("DBX web not installed: run `tirai setup` (or install Docker)")
+            return 1
+        name = "tirai-dbx"
+        if subprocess.call([docker, "start", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+            pw = ["-e", "DBX_PASSWORD"] if os.environ.get("DBX_PASSWORD") else []
+            cmd = [docker, "run", "-d", "--name", name, "-p", f"{args.port}:4224", "-v", "tirai-dbx-data:/app/data"]
+            if subprocess.call([*cmd, *pw, DBX_IMAGE]) != 0:
+                return 1
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(url, timeout=2)  # noqa: S310 - local URL
+            print(f"DBX web running: {url}")
+            return 0
+        except OSError:
+            time.sleep(1)
+    print(f"DBX web did not answer on {url}; see {TIRAI_HOME / 'dbx.log'}")
+    return 1
+
+
 def cmd_mcp(_args):
     from tirai.mcp import serve
 
@@ -194,7 +241,11 @@ def build_parser():
     )
     s.add_argument("--project", help="install skills into this project instead of the user profile")
     s.add_argument(
-        "--skip", action="extend", nargs="+", default=[], help="ffmpeg, browserskill, skills (comma or space separated)"
+        "--skip",
+        action="extend",
+        nargs="+",
+        default=[],
+        help="ffmpeg, agent-browser, dbx, browserskill, skills (comma or space separated)",
     )
     s.add_argument("--yes", "-y", action="store_true", help="install without prompting")
     s.add_argument("--dry-run", action="store_true", help="print what would be installed")
@@ -214,8 +265,10 @@ def build_parser():
         s.add_argument("scenario")
         s.add_argument("--env-file", help="KEY=VALUE file (default: .env next to the scenario)")
         s.add_argument("--out", default="evidence", help="output root (default: evidence/)")
-        s.add_argument("--session", help="reuse a live bsk session instead of opening a fresh one")
-        s.add_argument("--scope", default="tirai", help="bsk scope for the fresh session")
+        s.add_argument("--driver", choices=["agent-browser", "bsk"], help="browser driver (default: agent-browser)")
+        s.add_argument("--headed", action="store_true", help="show the agent-browser window (default: headless)")
+        s.add_argument("--session", help="reuse a live driver session instead of opening a fresh one")
+        s.add_argument("--scope", default="tirai", help="session name prefix for the fresh session")
         s.add_argument("--hold", type=float, help="seconds each step stays on screen")
 
     def compose_opts(s):
@@ -273,6 +326,10 @@ def build_parser():
     trace_opts(s)
     s.set_defaults(fn=cmd_capture)
 
+    s = sub.add_parser("dbx", help="start DBX web (installed by `tirai setup`, else Docker)")
+    s.add_argument("--port", type=int, default=int(os.environ.get("DBX_PORT", 4224)))
+    s.add_argument("--detach", "-d", action="store_true", help="run in the background (log: ~/.tirai/dbx.log)")
+    s.set_defaults(fn=cmd_dbx)
     sub.add_parser("mcp", help="run the TIRAI MCP server on stdio (for MCP-capable agents)").set_defaults(fn=cmd_mcp)
     sub.add_parser("annotate-js", help="print the path of the injectable annotate.js").set_defaults(fn=cmd_asset)
     return p

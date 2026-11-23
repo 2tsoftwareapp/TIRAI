@@ -2,13 +2,13 @@
 
 > TIRAI is an agent skill and Python CLI (`tirai`) that records test evidence. You write a test scenario
 > (steps, each with actions and expected results); TIRAI runs it in a real Chrome/Edge browser through
-> Tencent BrowserSkill, checks the database in a second browser tab (DBX web) plus a read-only SQL query,
+> vercel-labs agent-browser (default) or Tencent BrowserSkill, checks the database in a second browser tab (DBX web) plus a read-only SQL query,
 > draws Snagit-style annotations on the page, records each tab, and uses ffmpeg to compose one MP4 with
 > a header bar, PASS/FAIL badges and burned-in subtitles, plus a Markdown step report.
 
 TIRAI is an orchestration layer, not a browser or database tool:
 
-- Browser control, screenshots and per-tab MP4 recording: Tencent BrowserSkill (`bsk` CLI + browser extension).
+- Browser control, screenshots and per-tab MP4 recording: agent-browser (default; single binary, Chrome for Testing) or Tencent BrowserSkill (`bsk` CLI + browser extension). Select with `driver:` / `--driver`.
 - Database UI in the browser: DBX web (`t8y2/dbx`, port 4224, 100+ engines).
 - TIRAI: scenario format, dry-run and record runner, DOM and read-only DB assertions, injected annotation
   overlay (`annotate.js`), timeline, subtitle generation, video composition, report.
@@ -25,15 +25,15 @@ Key facts for agents:
   No Python prerequisite: the installer downloads the prebuilt `tirai-<os>-<arch>` binary from GitHub Releases
   when one exists, otherwise builds from source with Python >= 3.10, or with uv + a private Python 3.12 in `~/.tirai`
   when the machine has no suitable Python (`--binary` / `--source` force a method). It links `tirai` into
-  `~/.local/bin` and runs `tirai setup` (ffmpeg via the OS package manager, BrowserSkill CLI via its official installer, agent skills).
-- The BrowserSkill browser extension must be installed by the human from the Chrome Web Store / Edge Add-ons.
+  `~/.local/bin` and runs `tirai setup` (ffmpeg >= 6.0, upgraded to a static build when older; agent-browser binary + Chrome for Testing; DBX web package or Docker image; BrowserSkill CLI; agent skills). `tirai dbx -d` starts DBX web.
+- Only `driver: bsk` and `tirai capture` need the BrowserSkill browser extension, installed by the human.
   Never automate it. Never run `sudo` without asking; if a package install needs a password, ask the user.
 - Verify with `tirai doctor`: every required check must be `ok` before running scenarios.
 - Secrets only as `${ENV_VAR}` in scenarios; values live in the environment or a git-ignored `.env` next to
   the scenario (loaded automatically, or `--env-file`). Secrets are never written to timelines or reports.
 - Database checks use a read-only user. DBX renders result cells on a canvas, so `expect: db` runs its own
   read-only query (PostgreSQL, MySQL, SQLite) and annotations target DBX cells with `{ grid: {...} }`.
-- Find selectors with `bsk open <url>` / `bsk snapshot`; do not guess. A missing selector, annotation target
+- Find selectors with `agent-browser snapshot` (or `bsk snapshot`); do not guess. A missing selector, annotation target
   or env var fails the step (fail closed).
 - Supported agents: Claude Code, Codex, Cursor, Antigravity, Devin (`tirai install-skill --agent <name>`).
 
@@ -69,13 +69,13 @@ Key facts for agents:
 
 ```text
 usage: tirai [-h] [--version]
-             {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,mcp,annotate-js}
+             {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,dbx,mcp,annotate-js}
              ...
 
 Scenario-driven test evidence recorder
 
 positional arguments:
-  {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,mcp,annotate-js}
+  {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,dbx,mcp,annotate-js}
     doctor              check ffmpeg, BrowserSkill, fonts and optional drivers
     setup               install ffmpeg, BrowserSkill CLI and agent skills for this OS
     init                write a scenario template
@@ -88,6 +88,7 @@ positional arguments:
     from-trace          convert a `bsk record` trace into a scenario
     capture             record a flow you click through once (bsk record) and turn it into a
                         scenario
+    dbx                 start DBX web (installed by `tirai setup`, else Docker)
     mcp                 run the TIRAI MCP server on stdio (for MCP-capable agents)
     annotate-js         print the path of the injectable annotate.js
 
@@ -109,7 +110,8 @@ options:
                         agents to install the skill for (default: detected ones)
   --project PROJECT     install skills into this project instead of the user profile
   --skip SKIP [SKIP ...]
-                        ffmpeg, browserskill, skills (comma or space separated)
+                        ffmpeg, agent-browser, dbx, browserskill, skills (comma or space
+                        separated)
   --yes, -y             install without prompting
   --dry-run             print what would be installed
 
@@ -131,20 +133,23 @@ options:
   -h, --help           show this help message and exit
   --env-file ENV_FILE  KEY=VALUE file (default: .env next to the scenario)
 
-usage: tirai run [-h] [--env-file ENV_FILE] [--out OUT] [--session SESSION] [--scope SCOPE]
-                 [--hold HOLD] (--dry-run | --record)
+usage: tirai run [-h] [--env-file ENV_FILE] [--out OUT] [--driver {agent-browser,bsk}] [--headed]
+                 [--session SESSION] [--scope SCOPE] [--hold HOLD] (--dry-run | --record)
                  scenario
 
 positional arguments:
   scenario
 
 options:
-  -h, --help           show this help message and exit
-  --env-file ENV_FILE  KEY=VALUE file (default: .env next to the scenario)
-  --out OUT            output root (default: evidence/)
-  --session SESSION    reuse a live bsk session instead of opening a fresh one
-  --scope SCOPE        bsk scope for the fresh session
-  --hold HOLD          seconds each step stays on screen
+  -h, --help            show this help message and exit
+  --env-file ENV_FILE   KEY=VALUE file (default: .env next to the scenario)
+  --out OUT             output root (default: evidence/)
+  --driver {agent-browser,bsk}
+                        browser driver (default: agent-browser)
+  --headed              show the agent-browser window (default: headless)
+  --session SESSION     reuse a live driver session instead of opening a fresh one
+  --scope SCOPE         session name prefix for the fresh session
+  --hold HOLD           seconds each step stays on screen
   --dry-run
   --record
 
@@ -162,9 +167,10 @@ options:
   --title-seconds TITLE_SECONDS
   --lang LANG           subtitle language to burn in (from per-step subtitle maps)
 
-usage: tirai record [-h] [--env-file ENV_FILE] [--out OUT] [--session SESSION] [--scope SCOPE]
-                    [--hold HOLD] [--output OUTPUT] [--lead LEAD] [--title-seconds TITLE_SECONDS]
-                    [--lang LANG] [--skip-dry-run] [--record-failures]
+usage: tirai record [-h] [--env-file ENV_FILE] [--out OUT] [--driver {agent-browser,bsk}]
+                    [--headed] [--session SESSION] [--scope SCOPE] [--hold HOLD] [--output OUTPUT]
+                    [--lead LEAD] [--title-seconds TITLE_SECONDS] [--lang LANG] [--skip-dry-run]
+                    [--record-failures]
                     scenario
 
 positional arguments:
@@ -174,8 +180,11 @@ options:
   -h, --help            show this help message and exit
   --env-file ENV_FILE   KEY=VALUE file (default: .env next to the scenario)
   --out OUT             output root (default: evidence/)
-  --session SESSION     reuse a live bsk session instead of opening a fresh one
-  --scope SCOPE         bsk scope for the fresh session
+  --driver {agent-browser,bsk}
+                        browser driver (default: agent-browser)
+  --headed              show the agent-browser window (default: headless)
+  --session SESSION     reuse a live driver session instead of opening a fresh one
+  --scope SCOPE         session name prefix for the fresh session
   --hold HOLD           seconds each step stays on screen
   --output OUTPUT       final video path (default: <timeline dir>/final.mp4)
   --lead LEAD           seconds kept before each step starts
@@ -231,6 +240,13 @@ options:
   --no-resolve          skip the replay that resolves CSS selectors
   --scope SCOPE         bsk scope for the resolving replay
 
+usage: tirai dbx [-h] [--port PORT] [--detach]
+
+options:
+  -h, --help    show this help message and exit
+  --port PORT
+  --detach, -d  run in the background (log: ~/.tirai/dbx.log)
+
 usage: tirai mcp [-h]
 
 options:
@@ -268,12 +284,33 @@ The installer works on any machine, with or without Python:
 | **From source** (fallback, or `--source`) | no binary for this machine | Python ≥ 3.10 on the machine → `~/.tirai/venv`; otherwise it downloads [uv](https://docs.astral.sh/uv/) and a private Python 3.12 into `~/.tirai` (system Python is never touched) |
 
 Force a method with `sh install.sh --binary|--source` (PowerShell: `./install.ps1 --binary|--source`) or
-`TIRAI_INSTALL_MODE`. `tirai` is linked into `~/.local/bin`, then `tirai setup` installs ffmpeg, the BrowserSkill
-CLI and the agent skills. Install the BrowserSkill browser extension, then:
+`TIRAI_INSTALL_MODE`. `tirai` is linked into `~/.local/bin`, then `tirai setup` installs, for this OS:
+
+| Tool | How | Where |
+|---|---|---|
+| ffmpeg ≥ 6.0 | kept if already new enough; otherwise a static [BtbN](https://github.com/BtbN/FFmpeg-Builds) 8.1 build (Linux, Windows) or `brew install ffmpeg` (macOS). ffmpeg 4.4 breaks agent-browser recording | `~/.tirai/bin` |
+| [agent-browser](https://github.com/vercel-labs/agent-browser) | release binary, then `agent-browser install` (Chrome for Testing; `--with-deps` on Linux) | `~/.tirai/bin` |
+| [DBX web](https://github.com/t8y2/dbx) | `browser-static` release package, SHA-256 checked (Linux x64/arm64, Windows x64); Docker image `t8y2/dbx` elsewhere | `~/.tirai/dbx` |
+| BrowserSkill CLI | official installer (only needed for `driver: bsk` and `tirai capture`) | `~/.local/bin` |
+
+Skip any of them with `--skip ffmpeg,agent-browser,dbx,browserskill,skills`. Then:
 
 ```bash
 tirai doctor
+tirai dbx -d          # DBX web on http://127.0.0.1:4224; set DBX_PASSWORD for the web login
 ```
+
+## Browser drivers
+
+| | `agent-browser` (default) | `bsk` |
+|---|---|---|
+| Browser | Chrome for Testing, headless (`--headed` to watch) | your real Chrome/Edge via the BrowserSkill extension |
+| Recording | 30 fps, animated cursor (`TIRAI_CURSOR=0` to hide) | ~12 fps |
+| Extension needed | no | yes |
+| `tirai capture` | no | yes |
+
+Pick one with `driver:` in the scenario, `--driver`, or `TIRAI_DRIVER`. Both record the active tab only, so TIRAI
+records one segment per tab block and composes them.
 
 ### Build the binary yourself
 
@@ -522,8 +559,15 @@ Nothing is tied to one OS or install location. Every external tool, font and tim
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `TIRAI_HOME` | `~/.tirai` | where setup puts ffmpeg, agent-browser (`bin/`) and DBX web (`dbx/`) |
+| `TIRAI_DRIVER` | `agent-browser` if installed, else `bsk` | browser driver (scenario `driver:` and `--driver` win) |
+| `TIRAI_HEADED` | off | show the agent-browser window (same as `--headed`) |
+| `TIRAI_CURSOR` | `1` | draw agent-browser's animated cursor in recordings |
+| `AGENT_BROWSER_BIN` | `~/.tirai/bin`, PATH, `~/.local/bin` | agent-browser CLI |
+| `DBX_WEB_BIN`, `DBX_WEB_DIR` | `~/.tirai/dbx` | DBX web server binary / package folder |
+| `DBX_PORT`, `DBX_DATA_DIR`, `DBX_PASSWORD` | `4224`, `~/.tirai/dbx-data`, none | passed to DBX web by `tirai dbx` |
 | `BSK_BIN` | `bsk` on PATH, then `$BSK_INSTALL_DIR`, `~/.local/bin` | BrowserSkill CLI |
-| `FFMPEG_BIN`, `FFPROBE_BIN` | PATH, then Homebrew / winget / choco / scoop locations | ffmpeg tools |
+| `FFMPEG_BIN`, `FFPROBE_BIN` | `~/.tirai/bin`, PATH, then Homebrew / winget / choco / scoop locations | ffmpeg tools (≥ 6.0) |
 | `TIRAI_FONT`, `TIRAI_FONT_BOLD` | DejaVu Sans (Linux, also via `fc-match`), Arial Unicode/Arial (macOS), Arial/Segoe UI (Windows) | title, header and subtitle font files |
 | `TIRAI_SUBTITLE_FONT` | family of the font above | font family name for burned subtitles |
 | `TIRAI_VIDEO_SIZE` | size of the largest recorded segment | output content size, e.g. `1920x1080` |
@@ -627,11 +671,11 @@ leaves `TODO role=… name=…` selectors).
 scenario.yaml ──► tirai validate
       │
       ▼
-tirai run --dry-run ──► BrowserSkill (bsk) ──► real Chrome/Edge tabs (app, DBX web)
+tirai run --dry-run ──► agent-browser | BrowserSkill (bsk) ──► real Chrome/Edge tabs (app, DBX web)
       │                    │  fill / click / press / evaluate
       │                    └─ annotate.js injected per step (boxes, arrows, labels, blur)
       ▼
-tirai run --record ──► bsk video per contiguous tab block ──► seg-NN-<tab>.mp4 + timeline.json
+tirai run --record ──► driver recording per contiguous tab block ──► seg-NN-<tab>.mp4 + timeline.json
       │                                               └──► expect: db (read-only driver)
       ▼
 tirai compose ──► ffmpeg: cut steps, header bar, title card, concat, burn subtitles
@@ -640,14 +684,15 @@ tirai compose ──► ffmpeg: cut steps, header bar, title card, concat, burn 
 
 | Component | Owner | Why |
 |---|---|---|
-| Browser control, screenshots, MP4 | [Tencent BrowserSkill](https://github.com/Tencent/BrowserSkill) | real logged-in browser, works with every agent |
+| Browser control, screenshots, MP4 (default) | [agent-browser](https://github.com/vercel-labs/agent-browser) | single binary, no extension, headless or headed, 30 fps |
+| Browser control in your own browser | [Tencent BrowserSkill](https://github.com/Tencent/BrowserSkill) | real logged-in browser; also powers `tirai capture` |
 | Database UI in the browser | [DBX web](https://github.com/t8y2/dbx) | many database engines, password-protected web UI |
 | Scenario, checks, annotations, timeline, composition | TIRAI | the evidence-specific parts |
 
 Design rules:
 
 - **Dry-run before record**: recording only happens for a scenario that already passes, so videos have no failed attempts.
-- **Per-tab segments**: `bsk video` records a single tab, so the runner starts a new segment on every tab switch and composition restores scenario order.
+- **Per-tab segments**: both drivers record a single tab, so the runner starts a new segment on every tab switch and composition restores scenario order.
 - **Checks are independent of pixels**: DOM checks read the page; DB checks query read-only, because DBX renders result cells on a canvas.
 - **Fail closed**: a missing selector, annotation target or env var fails the step.
 
@@ -661,6 +706,9 @@ The previous spec-to-test platform (TypeScript workspaces) is preserved on branc
 
 | Symptom | Fix |
 |---|---|
+| `ffmpeg write failed: Broken pipe` when agent-browser stops recording | ffmpeg too old (4.4 fails); run `tirai setup` to get a current build in `~/.tirai/bin` |
+| `tirai doctor` says ffmpeg too old | `tirai setup` installs a newer one; or point `FFMPEG_BIN` at ffmpeg ≥ 6.0 |
+| DBX releases unreachable during setup | setup falls back to the Docker image; rerun later or set `DBX_WEB_BIN` |
 | `bsk doctor` shows no extension | open the browser with the BrowserSkill extension enabled and connected |
 | `bsk open failed ... session <id> unknown` | TIRAI closes the stale session and retries once; if it persists: `bsk session list`, `bsk close --session <id>`, or `--scope <new>` |
 | `requires an unused strict observation` / `control context no longer belongs` | page changed under an action; add `wait_for` before the next action. The runner already syncs before every action |
@@ -681,7 +729,7 @@ The previous spec-to-test platform (TypeScript workspaces) is preserved on branc
 
 ---
 name: tirai-evidence
-description: Record test evidence videos from a written test scenario. Drives a real browser with Tencent BrowserSkill (bsk), checks the database through DBX web in a second tab, draws Snagit-style boxes/arrows/labels on the page, and composes one MP4 with subtitles and a step report using ffmpeg. Use when the user wants an evidence video, a recorded test run, "quay evidence", or step-by-step proof of a UI + DB behaviour.
+description: Record test evidence videos from a written test scenario. Drives Chrome with vercel-labs agent-browser (default) or Tencent BrowserSkill (bsk), checks the database through DBX web in a second tab, draws Snagit-style boxes/arrows/labels on the page, and composes one MP4 with subtitles and a step report using ffmpeg. Use when the user wants an evidence video, a recorded test run, "quay evidence", or step-by-step proof of a UI + DB behaviour.
 ---
 
 # TIRAI evidence recording
@@ -692,11 +740,12 @@ Workflow: **scenario → dry-run → record → compose**. Never record before t
 
 ```bash
 tirai doctor            # if tirai is missing or a check fails: see references/setup.md
-tirai setup --yes       # installs ffmpeg, BrowserSkill CLI and skills for this OS
+tirai setup --yes       # installs ffmpeg >= 6, agent-browser, DBX web, BrowserSkill CLI, skills
+tirai dbx -d            # start DBX web (http://127.0.0.1:4224) when the scenario has a db tab
 ```
 
 All required checks must be `ok`. Works on macOS, Linux and Windows; follow
-[references/setup.md](references/setup.md). The user installs the browser extension themselves;
+[references/setup.md](references/setup.md). The default driver needs no extension; only `driver: bsk` / `tirai capture` need the user to install the BrowserSkill extension;
 never use `sudo` without asking.
 
 ## 1. Write the scenario with the user
@@ -720,7 +769,7 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
 
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
-- Find selectors with `bsk open <url>` / `bsk snapshot` before writing them; do not guess. Or let the user click
+- Find selectors with `agent-browser open <url>` + `agent-browser snapshot` (or `bsk snapshot`) before writing them; do not guess. Or let the user click
   the flow once: `tirai capture <url> -o <file>` writes the scenario from a `bsk record` trace.
 - Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `save:` to reuse on-screen values as `{{name}}`.
 - Video: `zoom: <selector>` on a step, `layout: split` to show UI and DB side by side; `subtitle: {en, vi}` + `--lang`.
@@ -758,7 +807,7 @@ Give the user `final.mp4`, `report.html` (or `report.xlsx`) and `manifest.sha256
 ## Ad-hoc annotation (outside a scenario)
 
 `tirai annotate-js` prints the path of `annotate.js`. Inject it with
-`bsk evaluate "$(cat <path>);__ann.arrow('#email',{label:'here'})" --unverified`, clear with `__ann.clear()`.
+`agent-browser eval --stdin < <path>` then `agent-browser eval "__ann.arrow('#email',{label:'here'})"` (bsk: `bsk evaluate "$(cat <path>);..." --unverified`), clear with `__ann.clear()`.
 
 ---
 
@@ -774,18 +823,21 @@ Give the user `final.mp4`, `report.html` (or `report.xlsx`) and `manifest.sha256
 If `tirai` is already on PATH, run `tirai setup --yes` (add `--agent <name>` to choose agents).
 It installs, with the OS package manager or official installer:
 
-1. ffmpeg (+ DejaVu font on Linux) — brew / apt, dnf, pacman, zypper, apk / winget, choco, scoop.
-2. BrowserSkill CLI (`bsk`) — Tencent's official `install.sh` / `install.ps1` into `~/.local/bin`.
-3. The `tirai-evidence` skill for detected agents, plus BrowserSkill's own skill for Claude Code, Codex, Cursor.
+1. ffmpeg >= 6.0 (+ DejaVu font on Linux) — kept if new enough; otherwise a static build into `~/.tirai/bin`
+   (Linux, Windows) or `brew install ffmpeg` (macOS).
+2. agent-browser (default driver) — release binary into `~/.tirai/bin`, then `agent-browser install` (Chrome for Testing).
+3. DBX web — `browser-static` release package into `~/.tirai/dbx` (Linux, Windows x64), else the Docker image.
+4. BrowserSkill CLI (`bsk`) — Tencent's official `install.sh` / `install.ps1` into `~/.local/bin`.
+5. The `tirai-evidence` skill for detected agents, plus BrowserSkill's own skill for Claude Code, Codex, Cursor.
 
 Manual steps the user must do (ask them; never automate):
 
-- Install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons and enable the connection.
-- For database tabs, run DBX web (`docker run -d -p 127.0.0.1:4224:4224 -e DBX_PASSWORD=... -e DBX_DISABLE_PASSWORD_VIEWER=true t8y2/dbx`)
+- Only for `driver: bsk` / `tirai capture`: install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons.
+- For database tabs, start DBX web: `DBX_PASSWORD=... tirai dbx -d` (installed binary, or Docker)
   and create a connection with a **read-only** database user.
 
 Finish with `tirai doctor` → `ready`. If Linux package installs need `sudo` and it asks for a password,
-ask the user to run the printed command. Tool paths can be overridden with `FFMPEG_BIN`, `FFPROBE_BIN`, `BSK_BIN`, `TIRAI_FONT`.
+ask the user to run the printed command. Tool paths can be overridden with `FFMPEG_BIN`, `FFPROBE_BIN`, `AGENT_BROWSER_BIN`, `DBX_WEB_BIN`, `BSK_BIN`, `TIRAI_FONT`.
 
 ---
 

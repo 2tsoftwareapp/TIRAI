@@ -2,6 +2,9 @@
 
 | Symptom | Fix |
 |---|---|
+| `ffmpeg write failed: Broken pipe` when agent-browser stops recording | ffmpeg too old (4.4 fails); run `tirai setup` to get a current build in `~/.tirai/bin` |
+| `tirai doctor` says ffmpeg too old | `tirai setup` installs a newer one; or point `FFMPEG_BIN` at ffmpeg ≥ 6.0 |
+| DBX releases unreachable during setup | setup falls back to the Docker image; rerun later or set `DBX_WEB_BIN` |
 | `bsk doctor` shows no extension | open the browser with the BrowserSkill extension enabled and connected |
 | `bsk open failed ... session <id> unknown` | TIRAI closes the stale session and retries once; if it persists: `bsk session list`, `bsk close --session <id>`, or `--scope <new>` |
 | `requires an unused strict observation` / `control context no longer belongs` | page changed under an action; add `wait_for` before the next action. The runner already syncs before every action |

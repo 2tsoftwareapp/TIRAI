@@ -8,6 +8,12 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 
 ### Added
 
+- agent-browser driver (vercel-labs, Apache-2.0) behind a driver interface, now the default; BrowserSkill stays
+  available via `driver: bsk`, `--driver bsk` or `TIRAI_DRIVER`. `--headed`, animated cursor in recordings.
+- `tirai setup` checks ffmpeg's version (>= 6.0; 4.4 breaks agent-browser recording) and installs a static build
+  into `~/.tirai/bin` when missing or old; downloads agent-browser + Chrome for Testing and DBX web.
+- `tirai dbx [-d] [--port]` starts DBX web (installed binary, or the Docker image on macOS).
+- `tirai doctor` reports ffmpeg version, agent-browser and DBX web; bsk is optional when agent-browser is present.
 - Data-driven scenarios: `include:` shared steps (`with:`, `prefix:`), `vars:`, `cases:` / `matrix:`, `once: true`,
   `{{name}}` placeholders, `save:` action and `db.save` to pass values between steps.
 - Video: chapters in `final.mp4`, `zoom:` ease-in on a target, `layout: split` (previous step beside this one).

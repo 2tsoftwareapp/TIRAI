@@ -231,6 +231,8 @@ def validate(sc) -> list[str]:
         return ["scenario must be a mapping"]
     if not sc.get("name"):
         errors.append("name: required")
+    if sc.get("driver") not in (None, "agent-browser", "bsk"):
+        errors.append("driver: must be agent-browser or bsk")
     settings = sc.get("settings") or {}
     if not isinstance(settings, dict):
         errors.append("settings: must be a mapping")

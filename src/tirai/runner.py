@@ -11,7 +11,8 @@ import time
 from pathlib import Path
 
 from tirai import db as dbq
-from tirai.bsk import Bsk, BskError
+from tirai.agentbrowser import make_driver
+from tirai.bsk import DriverError
 from tirai.resources import annotate_js
 from tirai.scenario import ScenarioError, interpolate, render
 from tirai.system import primary_modifier
@@ -29,11 +30,13 @@ def js(v):
 
 
 class Runner:
-    def __init__(self, scenario, out, session=None, record=False, hold=0.3, stop_on_fail=False, scope="tirai"):
+    def __init__(
+        self, scenario, out, session=None, record=False, hold=0.3, stop_on_fail=False, scope="tirai", driver=None
+    ):
         self.sc = scenario
         self.out = out
         self.scope = scope
-        self.b = Bsk(session)
+        self.b = make_driver(driver or scenario.get("driver"), session)
         self.record = record
         self.hold = hold
         self.stop_on_fail = stop_on_fail
@@ -282,7 +285,7 @@ class Runner:
     def console_cursor(self, tab):
         try:
             return self.b.console(self.tabs[tab]).get("next_since")
-        except BskError:
+        except DriverError:
             return None
 
     def check_console(self, tab, arg):
@@ -381,7 +384,7 @@ class Runner:
                     rec["zoom"] = self.zoom_rect(tab, render(step["zoom"], self.vars, strict=True))
                 if step.get("annotate"):
                     rec["annotations"] = self.annotate(tab, render(step["annotate"], self.vars, strict=True))
-            except (BskError, ScenarioError, KeyError, ValueError, RuntimeError) as e:
+            except (DriverError, ScenarioError, KeyError, ValueError, RuntimeError) as e:
                 rec["status"], rec["error"] = "error", str(e)
             if self.saved:
                 rec["saved"] = dict(self.saved)
@@ -390,7 +393,7 @@ class Runner:
             try:
                 self.b.screenshot(self.tabs[tab], str(shot))
                 rec["screenshot"] = shot.name
-            except BskError:
+            except DriverError:
                 pass
             rec["end"] = self.now()
             results.append(rec)
@@ -406,19 +409,20 @@ class Runner:
         return results
 
 
-def run(scenario, out_dir, record, session=None, scope="tirai", hold=None):
+def run(scenario, out_dir, record, session=None, scope="tirai", hold=None, driver=None):
     """Run `scenario` and write timeline.json into `out_dir`; returns the timeline dict."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     settings = scenario.get("settings") or {}
     hold = hold if hold is not None else float(settings.get("hold", 2.5) if record else 0.3)
-    r = Runner(scenario, out, session, record, hold, stop_on_fail=record, scope=scope)
+    r = Runner(scenario, out, session, record, hold, stop_on_fail=record, scope=scope, driver=driver)
     steps = r.run()
     timeline = {
         "scenario": scenario["name"],
         "mode": "record" if record else "dry-run",
         **({"lang": scenario["lang"]} if scenario.get("lang") else {}),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "driver": r.b.name,
         "tabs": {k: {"label": v.get("label", k)} for k, v in scenario["tabs"].items()},
         "segments": r.segments,
         "steps": steps,

@@ -2,13 +2,13 @@
 
 > TIRAI is an agent skill and Python CLI (`tirai`) that records test evidence. You write a test scenario
 > (steps, each with actions and expected results); TIRAI runs it in a real Chrome/Edge browser through
-> Tencent BrowserSkill, checks the database in a second browser tab (DBX web) plus a read-only SQL query,
+> vercel-labs agent-browser (default) or Tencent BrowserSkill, checks the database in a second browser tab (DBX web) plus a read-only SQL query,
 > draws Snagit-style annotations on the page, records each tab, and uses ffmpeg to compose one MP4 with
 > a header bar, PASS/FAIL badges and burned-in subtitles, plus a Markdown step report.
 
 TIRAI is an orchestration layer, not a browser or database tool:
 
-- Browser control, screenshots and per-tab MP4 recording: Tencent BrowserSkill (`bsk` CLI + browser extension).
+- Browser control, screenshots and per-tab MP4 recording: agent-browser (default; single binary, Chrome for Testing) or Tencent BrowserSkill (`bsk` CLI + browser extension). Select with `driver:` / `--driver`.
 - Database UI in the browser: DBX web (`t8y2/dbx`, port 4224, 100+ engines).
 - TIRAI: scenario format, dry-run and record runner, DOM and read-only DB assertions, injected annotation
   overlay (`annotate.js`), timeline, subtitle generation, video composition, report.
@@ -25,15 +25,15 @@ Key facts for agents:
   No Python prerequisite: the installer downloads the prebuilt `tirai-<os>-<arch>` binary from GitHub Releases
   when one exists, otherwise builds from source with Python >= 3.10, or with uv + a private Python 3.12 in `~/.tirai`
   when the machine has no suitable Python (`--binary` / `--source` force a method). It links `tirai` into
-  `~/.local/bin` and runs `tirai setup` (ffmpeg via the OS package manager, BrowserSkill CLI via its official installer, agent skills).
-- The BrowserSkill browser extension must be installed by the human from the Chrome Web Store / Edge Add-ons.
+  `~/.local/bin` and runs `tirai setup` (ffmpeg >= 6.0, upgraded to a static build when older; agent-browser binary + Chrome for Testing; DBX web package or Docker image; BrowserSkill CLI; agent skills). `tirai dbx -d` starts DBX web.
+- Only `driver: bsk` and `tirai capture` need the BrowserSkill browser extension, installed by the human.
   Never automate it. Never run `sudo` without asking; if a package install needs a password, ask the user.
 - Verify with `tirai doctor`: every required check must be `ok` before running scenarios.
 - Secrets only as `${ENV_VAR}` in scenarios; values live in the environment or a git-ignored `.env` next to
   the scenario (loaded automatically, or `--env-file`). Secrets are never written to timelines or reports.
 - Database checks use a read-only user. DBX renders result cells on a canvas, so `expect: db` runs its own
   read-only query (PostgreSQL, MySQL, SQLite) and annotations target DBX cells with `{ grid: {...} }`.
-- Find selectors with `bsk open <url>` / `bsk snapshot`; do not guess. A missing selector, annotation target
+- Find selectors with `agent-browser snapshot` (or `bsk snapshot`); do not guess. A missing selector, annotation target
   or env var fails the step (fail closed).
 - Supported agents: Claude Code, Codex, Cursor, Antigravity, Devin (`tirai install-skill --agent <name>`).
 

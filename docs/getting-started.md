@@ -20,12 +20,33 @@ The installer works on any machine, with or without Python:
 | **From source** (fallback, or `--source`) | no binary for this machine | Python ≥ 3.10 on the machine → `~/.tirai/venv`; otherwise it downloads [uv](https://docs.astral.sh/uv/) and a private Python 3.12 into `~/.tirai` (system Python is never touched) |
 
 Force a method with `sh install.sh --binary|--source` (PowerShell: `./install.ps1 --binary|--source`) or
-`TIRAI_INSTALL_MODE`. `tirai` is linked into `~/.local/bin`, then `tirai setup` installs ffmpeg, the BrowserSkill
-CLI and the agent skills. Install the BrowserSkill browser extension, then:
+`TIRAI_INSTALL_MODE`. `tirai` is linked into `~/.local/bin`, then `tirai setup` installs, for this OS:
+
+| Tool | How | Where |
+|---|---|---|
+| ffmpeg ≥ 6.0 | kept if already new enough; otherwise a static [BtbN](https://github.com/BtbN/FFmpeg-Builds) 8.1 build (Linux, Windows) or `brew install ffmpeg` (macOS). ffmpeg 4.4 breaks agent-browser recording | `~/.tirai/bin` |
+| [agent-browser](https://github.com/vercel-labs/agent-browser) | release binary, then `agent-browser install` (Chrome for Testing; `--with-deps` on Linux) | `~/.tirai/bin` |
+| [DBX web](https://github.com/t8y2/dbx) | `browser-static` release package, SHA-256 checked (Linux x64/arm64, Windows x64); Docker image `t8y2/dbx` elsewhere | `~/.tirai/dbx` |
+| BrowserSkill CLI | official installer (only needed for `driver: bsk` and `tirai capture`) | `~/.local/bin` |
+
+Skip any of them with `--skip ffmpeg,agent-browser,dbx,browserskill,skills`. Then:
 
 ```bash
 tirai doctor
+tirai dbx -d          # DBX web on http://127.0.0.1:4224; set DBX_PASSWORD for the web login
 ```
+
+## Browser drivers
+
+| | `agent-browser` (default) | `bsk` |
+|---|---|---|
+| Browser | Chrome for Testing, headless (`--headed` to watch) | your real Chrome/Edge via the BrowserSkill extension |
+| Recording | 30 fps, animated cursor (`TIRAI_CURSOR=0` to hide) | ~12 fps |
+| Extension needed | no | yes |
+| `tirai capture` | no | yes |
+
+Pick one with `driver:` in the scenario, `--driver`, or `TIRAI_DRIVER`. Both record the active tab only, so TIRAI
+records one segment per tab block and composes them.
 
 ### Build the binary yourself
 
