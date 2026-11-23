@@ -17,9 +17,33 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
   `targets:` block, including pages reached after login.
 - Selector failures end with `nearby: …` suggestions from the current page.
 - `tirai verify --out <dir>` (same as the positional folder, matching `run`/`record --out`).
+- Steps that write data: `writes:` (and write SQL, detected) make a dry-run stop before them unless
+  `--allow-writes`; `tirai validate` lists them; `cleanup:` steps run after the run when a write happened; the
+  report has a "Data written" table with the values each write step saved.
+- `for_each:` repeats a step per list item; `once: last` runs a step only after the last case.
+- Inline `- expect: {...}` between actions; `save:` as a step key; `tabs.<name>.popup: true` (+ `match:`) follows
+  windows the page opens.
+- `tirai run --until <step>`, `--keep-session`, `--from-step <step>` (continues in the kept session's open pages
+  with the values saved by the previous run), `--fresh` (clear cookies/storage before tab setup).
+- Each step records failed requests (4xx/5xx) and console errors, printed and reported even when it passes;
+  `settings.strict_network` fails the step, `settings.ignore_requests` filters.
+- Auto-scroll before click/fill/select/hover/upload/press; `settings.viewport`; `wait_for: {idle: true}` and
+  `wait_for: {selector, timeout}`.
+- `tirai compose|record --trim-still` (or `settings.trim_still`): stills of 2 s or more play at 8x with a badge.
+- `tirai init` adds `**/.env` and `evidence/` to `.gitignore`; `validate` warns about a `.env` git does not ignore
+  and checks that `databases:` DSNs are read-only (`--no-db-check` skips it).
+- `install-skill --agent agents` installs into the shared `~/.agents/skills`.
 
 ### Fixed
 
+- YAML syntax errors name the file, line and offending text, with a hint to quote `${...}` values.
+- `save.pattern` is a JavaScript RegExp like `text_matches` (was Python `re`); JS-only forms such as `[^]` and
+  named groups validate; an invalid pattern is a step error instead of a crash.
+- Playwright-only selectors (`:has-text`, `:text-is`, `>>`, `:visible`) are rejected by `validate` with a locator
+  suggestion instead of failing as "not found" at run time; CSS lists get a warning.
+- `db` checks reject unknown keys; `db.save` with a missing column or no rows is an error (was silently ignored).
+- Unknown step keys are reported (a misplaced `save:` was silently ignored).
+- Unexpected errors print one `error: …` line; `TIRAI_DEBUG=1` shows the traceback.
 - `tirai dbx -d` no longer fails with AddrInUse when another (non-DBX) service holds port 4224: it picks the next
   free port and prints the `DBX_URL` to use.
 - `tirai setup` skips sudo package installs when sudo would prompt without a terminal (agent shells) and prints the

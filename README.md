@@ -227,8 +227,8 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 | `tirai dbx [-d] [--port]` | Start DBX web (installed binary, or Docker) |
 | `tirai doctor` | Check tools, fonts, drivers and the browser connection |
 | `tirai init <file>` | Write a scenario template |
-| `tirai validate <file>` | Check structure and required environment variables |
-| `tirai run <file> --dry-run \| --record` | Execute steps, optionally recording |
+| `tirai validate <file>` | Check structure, required environment variables, steps that write data and read-only DSNs |
+| `tirai run <file> --dry-run \| --record` | Execute steps, optionally recording; a dry-run stops before `writes:` steps unless `--allow-writes` (`--until`, `--keep-session` + `--from-step`, `--fresh`) |
 | `tirai record <file>` | Dry-run, record and compose in one go (`--record-failures`: keep going and record bug evidence) |
 | `tirai verify [dir]` | Check an evidence folder against its `manifest.sha256` |
 | `tirai compose <timeline.json>` | Rebuild the video and report from a recorded timeline |
@@ -247,7 +247,9 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 ## Security
 
 - **Secrets** are referenced as `${ENV_VAR}` (shell or a git-ignored `.env`) and never written to timelines, reports or video metadata.
-- **Database access is read-only**: use a read-only user for both DBX and `expect: db`.
+- **Database access is read-only**: use a read-only user for both DBX and `expect: db`; `tirai validate` warns when a DSN can write.
+- **Shared test data**: steps marked `writes:` don't run in a dry-run unless `--allow-writes`; `cleanup:` undoes them and the report lists what was written.
+- **`tirai init`** adds `**/.env` and `evidence/` to `.gitignore`.
 - **Blur is instant**: masks render before the next frame, so sensitive values never appear in the recording.
 - **Automatic PII masking** (`privacy:`): emails, phones, cards, tokens and custom patterns are covered on every page; `privacy.ocr` / `tirai scan-pii` OCR the final video to catch text drawn on canvas (DBX grids, desktop apps).
 - **Tamper evidence**: `tirai sign` signs `manifest.sha256` with an SSH key (optional RFC 3161 timestamp); `tirai verify --pubkey` rejects edited files, regenerated manifests and the wrong key.

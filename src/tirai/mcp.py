@@ -41,9 +41,26 @@ TOOLS = {
         lambda a: ["validate", a["scenario"]],
     ),
     "dry_run": (
-        "Run every step without recording; reports which step/expectation fails. Always do this before record.",
-        _obj({"scenario": S, "out": S, "driver": DRIVER, "headed": HEADED, "cwd": CWD}, ["scenario"]),
-        lambda a: ["run", a["scenario"], "--dry-run", *_out(a), *_driver(a)],
+        "Run every step without recording; reports which step/expectation fails. Always do this before record. "
+        "Stops before steps that write data (writes:, write SQL) unless allow_writes; `until`/`from_step` (with "
+        "`session` kept by keep_session) run part of the flow; `fresh` clears cookies/storage first.",
+        _obj(
+            {
+                "scenario": S,
+                "out": S,
+                "driver": DRIVER,
+                "headed": HEADED,
+                "allow_writes": B,
+                "until": S,
+                "from_step": S,
+                "session": S,
+                "keep_session": B,
+                "fresh": B,
+                "cwd": CWD,
+            },
+            ["scenario"],
+        ),
+        lambda a: ["run", a["scenario"], "--dry-run", *_out(a), *_driver(a), *_run_flags(a)],
     ),
     "inspect": (
         "Dry-run a scenario (or open a URL) and write, per step, the page's elements with ready-to-use locators "
@@ -59,6 +76,7 @@ TOOLS = {
                 "out": S,
                 "lang": {"type": "string", "description": "subtitle language to burn in"},
                 "record_failures": {"type": "boolean", "description": "still record/compose when a step fails"},
+                "trim_still": {"type": "boolean", "description": "fast-forward stretches where nothing changes"},
                 "driver": DRIVER,
                 "headed": HEADED,
                 "cwd": CWD,
@@ -71,6 +89,7 @@ TOOLS = {
             *_out(a),
             *(["--lang", a["lang"]] if a.get("lang") else []),
             *(["--record-failures"] if a.get("record_failures") else []),
+            *(["--trim-still"] if a.get("trim_still") else []),
             *_driver(a),
         ],
     ),
@@ -176,6 +195,14 @@ TOOLS = {
 
 def _driver(a):
     return [*(["--driver", a["driver"]] if a.get("driver") else []), *(["--headed"] if a.get("headed") else [])]
+
+
+def _run_flags(a):
+    flags = [f"--{k.replace('_', '-')}" for k in ("allow_writes", "keep_session", "fresh") if a.get(k)]
+    for k in ("until", "from_step", "session"):
+        if a.get(k):
+            flags += [f"--{k.replace('_', '-')}", a[k]]
+    return flags
 
 
 def _out(a):

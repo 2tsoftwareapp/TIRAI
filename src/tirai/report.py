@@ -28,6 +28,57 @@ def _checks(step):
     return [(c["type"], c["ok"], c.get("expected"), c.get("actual")) for c in step.get("checks", [])]
 
 
+def extra_md(tl):
+    """Markdown sections for data written, failed requests/console errors and cleanup (empty when none)."""
+    out = []
+    writes = [s for s in tl["steps"] if s.get("writes")]
+    if writes:
+        out += ["", "## Data written", "", "| Step | What | Saved values |", "|---|---|---|"]
+        for s in writes:
+            saved = ", ".join(f"{k}={v}" for k, v in (s.get("saved") or {}).items()) or "-"
+            out.append(f"| {s['id']} | {s['writes']} | {saved} |")
+    noisy = [s for s in tl["steps"] if s.get("failed_requests") or s.get("console_errors")]
+    if noisy:
+        out += ["", "## Failed requests and console errors", ""]
+        for s in noisy:
+            for r in s.get("failed_requests") or []:
+                out.append(f"- {s['id']} request: `{r}`")
+            for c in s.get("console_errors") or []:
+                out.append(f"- {s['id']} console: `{c}`")
+    if tl.get("cleanup"):
+        out += ["", "## Cleanup", ""]
+        out += [
+            f"- {c['id']}: {c['status'].upper()}" + (f" ({c['error']})" if c.get("error") else "")
+            for c in tl["cleanup"]
+        ]
+    return out
+
+
+def _extra_html(tl):
+    e = html.escape
+    parts = []
+    writes = [s for s in tl["steps"] if s.get("writes")]
+    if writes:
+        rows = "".join(
+            f"<tr><td>{e(s['id'])}</td><td>{e(str(s['writes']))}</td>"
+            f"<td>{e(', '.join(f'{k}={v}' for k, v in (s.get('saved') or {}).items()) or '-')}</td></tr>"
+            for s in writes
+        )
+        parts.append(f"<h2>Data written</h2><table><tr><th>Step</th><th>What</th><th>Saved</th></tr>{rows}</table>")
+    items = [
+        f"<li>{e(s['id'])} {kind}: <code>{e(x)}</code></li>"
+        for s in tl["steps"]
+        for kind, key in (("request", "failed_requests"), ("console", "console_errors"))
+        for x in s.get(key) or []
+    ]
+    if items:
+        parts.append(f"<h2>Failed requests and console errors</h2><ul>{''.join(items)}</ul>")
+    if tl.get("cleanup"):
+        li = "".join(f"<li>{e(c['id'])}: {e(c['status'].upper())} {e(c.get('error', ''))}</li>" for c in tl["cleanup"])
+        parts.append(f"<h2>Cleanup</h2><ul>{li}</ul>")
+    return "".join(parts)
+
+
 def write_html(rec_dir, tl, video_name):
     """Single self-contained file: screenshots are embedded, step times jump the video player."""
     rec_dir = Path(rec_dir)
@@ -75,6 +126,7 @@ integrity: <code>{MANIFEST}</code> (check with <code>tirai verify</code>)</div>
 <video id="v" src="{e(video_name)}" controls></video>
 <table><tr><th>Step</th><th>Tab</th><th>Title</th><th>Status</th><th>Video</th><th>Checks</th><th>Screenshot</th></tr>
 {"".join(rows)}</table>
+{_extra_html(tl)}
 <script>function seek(t){{const v=document.getElementById('v');v.currentTime=t;v.play();}}</script>
 </body></html>
 """

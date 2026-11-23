@@ -6,7 +6,6 @@ record:  same flow, one MP4 per contiguous tab block, plus timeline.json for `ti
 
 import json
 import os
-import re
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -17,7 +16,7 @@ from tirai.agentbrowser import make_driver
 from tirai.bsk import DriverError
 from tirai.desktop import MixedDriver, is_desktop
 from tirai.resources import annotate_js
-from tirai.scenario import ScenarioError, interpolate, render
+from tirai.scenario import ScenarioError, interpolate, render, step_writes
 from tirai.system import primary_modifier
 
 DBX_DEFAULTS = {
@@ -47,6 +46,31 @@ def _origin(url):
     return f"{u.scheme}://{u.netloc}"
 
 
+def _matches(step_id, ref):
+    """`ref` names this step, or the family of steps expanded from it (`LINES` -> `LINES-1`, `LINES-2`)."""
+    return bool(ref) and (step_id == ref or str(step_id).startswith(f"{ref}-"))
+
+
+def _listify(v):
+    return [] if v is None else v if isinstance(v, list) else [v]
+
+
+SCROLL_IF_NEEDED = (
+    "(()=>{{const e=document.querySelector({sel});if(!e)return false;const r=e.getBoundingClientRect();"
+    "if(r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth)return false;"
+    "e.scrollIntoView({{block:'center',inline:'center'}});return true}})()"
+)
+_BUFFER = "try{performance.setResourceTimingBufferSize(10000)}catch(e){}"
+STEP_MARK = "(()=>{" + _BUFFER + "return performance.timeOrigin+performance.now()})()"
+FAILED_REQUESTS = (
+    "(()=>{{const m={mark};return [...performance.getEntriesByType('navigation'),"
+    "...performance.getEntriesByType('resource')]"
+    ".filter(e=>e.responseStatus>=400&&performance.timeOrigin+e.startTime>=m-50)"
+    ".map(e=>e.responseStatus+' '+e.name)}})()"
+)
+IDLE_PROBE = "[document.readyState,performance.getEntriesByType('resource').length]"
+
+
 def _privacy_summary(cfg):
     """What the OCR pass needs from `privacy:` (rules, patterns, keep, mode); selectors stay out."""
     return {k: cfg[k] for k in ("mask", "patterns", "keep", "ocr") if cfg.get(k) is not None}
@@ -54,9 +78,32 @@ def _privacy_summary(cfg):
 
 class Runner:
     def __init__(
-        self, scenario, out, session=None, record=False, hold=0.3, stop_on_fail=False, scope="tirai", driver=None
+        self,
+        scenario,
+        out,
+        session=None,
+        record=False,
+        hold=0.3,
+        stop_on_fail=False,
+        scope="tirai",
+        driver=None,
+        allow_writes=True,
+        until=None,
+        from_step=None,
+        keep_session=False,
+        fresh=False,
+        resume_vars=None,
     ):
         self.sc = scenario
+        self.allow_writes = allow_writes
+        self.until = until
+        self.from_step = from_step
+        self.keep_session = keep_session
+        self.fresh = fresh
+        self.stopped = None
+        self.wrote = []
+        self.cleanup_results = []
+        self.seen_tabs = set()
         self.out = out
         self.scope = scope
         if any("app" in (cfg or {}) for cfg in scenario["tabs"].values()):
@@ -69,7 +116,8 @@ class Runner:
         self.tabs = {}
         self.dbx_editor_ready = set()
         self.console_since = {}
-        self.vars = {}
+        self.vars = dict(resume_vars or {})
+        self.resumed = dict(resume_vars or {})
         self.targets = scenario.get("_targets") or tg.normalize(scenario.get("targets"))
         self.warnings = []
         self.inspect = False
@@ -79,6 +127,7 @@ class Runner:
         settings = scenario.get("settings") or {}
         self.timing = float(os.environ.get("TIRAI_TIMING_SCALE") or settings.get("timing_scale", 1.0))
         self.expect_timeout = float(os.environ.get("TIRAI_EXPECT_TIMEOUT") or settings.get("expect_timeout", 6))
+        self.settings = settings
 
     def pause(self, seconds):
         """Settle delay after UI actions; scale with TIRAI_TIMING_SCALE / settings.timing_scale on slow machines."""
@@ -106,23 +155,83 @@ class Runner:
             raise RuntimeError(f"dbx.connect {conn['name']}: {e}") from None
 
     def open_tabs(self):
+        resume = self.from_step and self.b.session and hasattr(self.b, "tab_list")
+        existing = self.b.tab_list() if resume else []
+        cleared = False
         for name, cfg in self.sc["tabs"].items():
+            if cfg.get("popup"):
+                continue  # adopted from the browser when a step first uses it
             if "app" in cfg:
                 self.tabs[name] = self.b.desk.launch(name, {**cfg, "app": interpolate(cfg["app"])})
                 self.pause(1.0)
                 for action in cfg.get("setup", []):
                     self.do_action(name, action)
                 continue
+            url = interpolate(cfg["url"])
+            if resume:
+                # --from-step: continue on the page the earlier run left open (state, login) instead of a new tab.
+                taken = set(self.tabs.values())
+                free = [t for t in existing if t["id"] not in taken]
+                hits = [t["id"] for t in free if t["url"].startswith(url)] or [
+                    t["id"] for t in free if t["url"].startswith(_origin(url))
+                ]
+                if hits:
+                    self.tabs[name] = hits[0]  # the oldest: popups opened later share the origin
+                    self.prepare_tab(name)
+                    continue
             self.provision_dbx(cfg)
             if not self.b.session:
-                self.tabs[name] = self.b.open_session(interpolate(cfg["url"]), self.scope)
+                self.tabs[name] = self.b.open_session(url, self.scope)
             else:
-                self.tabs[name] = self.b.tab_create(interpolate(cfg["url"]))
+                self.tabs[name] = self.b.tab_create(url)
             self.pause(1.5)
             self.b.sync(self.tabs[name])
-            self.check_loaded(name, interpolate(cfg["url"]))
+            self.check_loaded(name, url)
+            if self.fresh and hasattr(self.b, "clear_state"):
+                # Cookies are per browser session: clear them once, before any tab's setup logs in.
+                self.b.clear_state(self.tabs[name], cookies=not cleared)
+                cleared = True
+                self.b.navigate(self.tabs[name], url)
+                self.pause(1.0)
+            self.prepare_tab(name)
             for action in cfg.get("setup", []):
                 self.do_action(name, action)
+        if resume:
+            self.seen_tabs = set(self.tabs.values())  # popups left open by the earlier run can be adopted
+        elif hasattr(self.b, "tab_list"):
+            try:
+                self.seen_tabs = {t["id"] for t in self.b.tab_list()}
+            except DriverError:
+                self.seen_tabs = set()
+
+    def prepare_tab(self, name):
+        vp = self.settings.get("viewport")
+        if vp and hasattr(self.b, "set_viewport") and not is_desktop(self.tabs[name]):
+            self.b.set_viewport(self.tabs[name], vp["width"], vp["height"])
+
+    def bind_popup(self, name):
+        """Point a `popup: true` tab at the browser tab the page opened (window.open / target=_blank)."""
+        if not hasattr(self.b, "tab_list"):
+            raise ScenarioError(f"tab {name}: popup tabs need a driver that lists tabs")
+        match = self.sc["tabs"][name].get("match")
+        deadline = time.time() + self.expect_timeout
+        while True:
+            tabs = self.b.tab_list()
+            current = self.tabs.get(name)
+            if current is not None and any(t["id"] == current for t in tabs):
+                return
+            others = {v for k, v in self.tabs.items() if k != name}
+            new = [t for t in tabs if t["id"] not in others and t["id"] not in self.seen_tabs or t["id"] == current]
+            new = [t for t in new if not match or match in t["url"]]
+            if new:
+                self.tabs[name] = new[-1]["id"]
+                self.seen_tabs.add(new[-1]["id"])
+                self.prepare_tab(name)
+                return
+            if time.time() > deadline:
+                where = f" with URL containing {match!r}" if match else ""
+                raise ScenarioError(f"tab {name}: no new browser tab{where} opened (popup)")
+            self.pause(0.5)
 
     def check_loaded(self, name, url):
         """Fail fast when a tab shows the browser's own error page (server down, wrong port)."""
@@ -135,6 +244,8 @@ class Runner:
 
     # ---------- recording ----------
     def ensure_segment(self, tab):
+        if self.sc["tabs"][tab].get("popup"):
+            self.bind_popup(tab)
         if self.seg and self.seg["tab"] == tab:
             return
         self.close_segment()
@@ -182,7 +293,12 @@ class Runner:
         elif kind == "wait":
             time.sleep(float(arg) / 1000)
         elif kind == "wait_for":
-            self.b.wait_for(tid, arg)
+            if isinstance(arg, dict) and arg.get("idle"):
+                self.wait_idle(tab, float(arg.get("timeout", 15000)) / 1000)
+            elif isinstance(arg, dict):
+                self.b.wait_for(tid, arg["selector"], timeout=f"{float(arg.get('timeout', 10000)) / 1000:g}s")
+            else:
+                self.b.wait_for(tid, arg)
         elif kind == "dbx_login":
             pw = self.dbx(tab)["password"]
             if self.b.evaluate(tid, f"!!document.querySelector({js(pw)})"):
@@ -232,18 +348,23 @@ class Runner:
         """Store text/value/attribute of an element as `{{name}}` for later steps."""
         attr = arg.get("attribute")
         read = f"e.getAttribute({js(attr)})" if attr else "(e.matches('input,textarea,select')?e.value:e.innerText)"
-        expr = f"(()=>{{const e=document.querySelector({js(arg['selector'])});return e?{read}:null}})()"
+        # `pattern` is a JavaScript RegExp, like text_matches, so it runs in the page.
+        expr = (
+            f"(()=>{{const e=document.querySelector({js(arg['selector'])});if(!e)return null;"
+            f"const v=String({read}??'').trim();const p={js(arg.get('pattern'))};if(!p)return {{v}};"
+            f"let r;try{{r=new RegExp(p,{js(arg.get('flags', ''))})}}catch(x){{return {{err:x.message}}}}"
+            "const m=r.exec(v);return m?{v:m.length>1?m[1]:m[0]}:{miss:v.slice(0,80)}})()"
+        )
         deadline = time.time() + self.expect_timeout
-        while (value := self.page(tab, expr)) is None and time.time() < deadline:
+        while not isinstance(res := self.page(tab, expr), dict) and time.time() < deadline:
             self.pause(0.5)
-        if value is None:
+        if not isinstance(res, dict):
             raise ScenarioError(f"save {arg['name']}: {arg['selector']} not found")
-        value = str(value).strip()
-        if arg.get("pattern"):
-            m = re.search(arg["pattern"], value)
-            if not m:
-                raise ScenarioError(f"save {arg['name']}: pattern {arg['pattern']!r} not in {value[:80]!r}")
-            value = m.group(1) if m.groups() else m.group(0)
+        if "err" in res:
+            raise ScenarioError(f"save {arg['name']}: invalid pattern {arg['pattern']!r}: {res['err']}")
+        if "miss" in res:
+            raise ScenarioError(f"save {arg['name']}: pattern {arg['pattern']!r} not in {res['miss']!r}")
+        value = res["v"]
         self.vars[arg["name"]] = value
         self.saved[arg["name"]] = value
 
@@ -292,6 +413,18 @@ class Runner:
         """Run an action; when recording, note where it happened (camera follow) and long waits (fast-forward)."""
         ((kind, arg),) = action.items()
         self.retarget(tab, tg.used_in(action))
+        target = arg.get("selector") if isinstance(arg, dict) else arg
+        if (
+            kind in ("fill", "click", "select", "hover", "upload", "press")
+            and isinstance(target, str)
+            and self.settings.get("auto_scroll", True)
+            and not is_desktop(self.tabs[tab])
+        ):
+            try:
+                if self.page(tab, SCROLL_IF_NEEDED.format(sel=js(target))):
+                    self.pause(0.4)
+            except DriverError:
+                pass
         t0 = self.now()
         if t0 is not None and follow:
             target = arg.get("selector") if isinstance(arg, dict) else arg
@@ -314,6 +447,21 @@ class Runner:
         speed = float((self.sc.get("settings") or {}).get("fast_forward", 4))
         if t0 is not None and kind in ("wait", "wait_for") and speed > 1 and (t1 := self.now()) - t0 >= 1.5:
             rec.setdefault("idle", []).append([round(t0 + 0.3, 3), round(t1 - 0.2, 3), speed])
+
+    def wait_idle(self, tab, timeout):
+        """Wait until the document is loaded and no new requests started for 1 s (SPA settled)."""
+        deadline = time.time() + timeout
+        last, since = None, time.time()
+        while time.time() < deadline:
+            state = self.page(tab, IDLE_PROBE)
+            if state != last:
+                last, since = state, time.time()
+            elif isinstance(state, list) and state[0] == "complete" and time.time() - since >= 1.0:
+                return
+            self.pause(0.25)
+        msg = f"wait_for idle: page still loading after {timeout:g}s; continuing"
+        self.warnings.append(msg)
+        print(f"     warning: {msg}")
 
     def target_rect(self, tab, selector):
         if is_desktop(self.tabs[tab]):
@@ -433,7 +581,9 @@ class Runner:
             expr = (
                 f"(()=>{{const e={(q + '(' + js(sel) + ')') if sel else 'document.body'};"
                 f"if(!e)return [false,'not found'];const t=e.innerText.trim();"
-                f"return [new RegExp({js(arg['pattern'])},{js(arg.get('flags', ''))}).test(t),t.slice(0,160)]}})()"
+                f"let r;try{{r=new RegExp({js(arg['pattern'])},{js(arg.get('flags', ''))})}}"
+                "catch(x){return [false,'invalid pattern: '+x.message]}"
+                "return [r.test(t),t.slice(0,160)]})()"
             )
         elif kind == "value":
             expr = (
@@ -505,8 +655,11 @@ class Runner:
         cols = arg.get("columns") or (list(want[0]) if want and isinstance(want[0], dict) else None)
         got = [dict(zip(cols, r, strict=False)) if cols else list(r) for r in rows]
         for name, col in (arg.get("save") or {}).items():
-            if got and cols and col in got[0]:
-                self.vars[name] = self.saved[name] = got[0][col]
+            if not got:
+                raise ScenarioError(f"db save {name}: the query returned no rows")
+            if not cols or col not in got[0]:
+                raise ScenarioError(f"db save {name}: no column {col!r} (columns: {cols}); save maps variable: column")
+            self.vars[name] = self.saved[name] = got[0][col]
 
         def norm(v):
             return json.loads(json.dumps(v, default=str))
@@ -578,19 +731,104 @@ class Runner:
         try:
             return self.run_steps()
         finally:
+            try:
+                self.run_cleanup()
+            except Exception as e:  # noqa: BLE001 - report, but keep the run's own result/error
+                print(f"[cleanup] ERROR: {e}")
             # Always release the browser (and its daemon), also after an error or Ctrl+C.
-            if self.own_session:
+            if self.own_session and self.keep_session and self.b.session:
+                print(f"session kept: {self.b.session} (continue with --session {self.b.session} --from-step <id>)")
+            elif self.own_session:
                 try:
                     self.b.close_session()
                 except Exception:  # noqa: BLE001 - best effort; the original error matters more
                     pass
 
+    def run_cleanup(self):
+        """`cleanup:` steps after the run (not recorded); skipped when the dry-run stopped before any write."""
+        steps = self.sc.get("cleanup") or []
+        if not steps or not self.tabs:
+            return
+        declared = any(step_writes(st) for st in self.sc["steps"])
+        if declared and not self.wrote:
+            return
+        self.close_segment()
+        self.record = False
+        for st in steps:
+            st = render(st, self.vars)
+            rec = {"id": st.get("id", "cleanup"), "tab": st["tab"], "checks": []}
+            try:
+                self.ensure_segment(st["tab"])
+                for action in st.get("actions") or []:
+                    self.tracked_action(st["tab"], render(action, self.vars, strict=True), rec, False)
+                for exp in st.get("expect") or []:
+                    rec["checks"].append(self.check(st["tab"], render(exp, self.vars, strict=True)))
+                rec["status"] = "passed" if all(c["ok"] for c in rec["checks"]) else "failed"
+            except (DriverError, ScenarioError, KeyError, ValueError, RuntimeError) as e:
+                rec["status"], rec["error"] = "error", str(e)
+            self.cleanup_results.append(rec)
+            print(f"[cleanup {rec['id']}] {rec['status'].upper()}" + (f": {rec['error']}" if rec.get("error") else ""))
+
+    def diag_start(self, tab):
+        """Remember where the console and the page's request log stand when the step starts."""
+        if is_desktop(self.tabs[tab]):
+            return None
+        try:
+            return {"console": self.console_cursor(tab), "mark": self.b.evaluate(self.tabs[tab], STEP_MARK)}
+        except DriverError:
+            return None
+
+    def diag_end(self, tab, mark, rec):
+        """Failed requests (4xx/5xx) and console errors raised during the step, reported even when it passes."""
+        if not mark:
+            return
+        ignore = ["favicon", *(self.settings.get("ignore_requests") or [])]
+        try:
+            reqs = self.b.evaluate(self.tabs[tab], FAILED_REQUESTS.format(mark=js(mark["mark"]))) or []
+            reqs = [r for r in reqs if isinstance(r, str) and not any(i in r for i in ignore)]
+        except DriverError:
+            reqs = []
+        try:
+            data = self.b.console(self.tabs[tab], mark["console"])
+            errs = [
+                e.get("text", "")[:200]
+                for e in data.get("entries", [])
+                if e.get("level") == "error" or e.get("kind") == "exception"
+            ]
+        except DriverError:
+            errs = []
+        if reqs:
+            rec["failed_requests"] = list(dict.fromkeys(reqs))[:20]
+            print("     network: " + "; ".join(rec["failed_requests"][:5]))
+            if self.settings.get("strict_network"):
+                rec["checks"].append(
+                    {"type": "network", "expected": "no 4xx/5xx", "actual": rec["failed_requests"], "ok": False}
+                )
+        if errs:
+            rec["console_errors"] = list(dict.fromkeys(errs))[:20]
+            print("     console: " + "; ".join(rec["console_errors"][:3]))
+
+    def planned(self):
+        steps = self.sc["steps"]
+        if self.from_step:
+            idx = next((i for i, st in enumerate(steps) if _matches(st["id"], self.from_step)), None)
+            if idx is None:
+                raise ScenarioError(f"--from-step {self.from_step}: no such step")
+            steps = steps[idx:]
+        return steps
+
     def run_steps(self):
+        steps = self.planned()
         self.open_tabs()
         results = []
-        for step in self.sc["steps"]:
+        for i, step in enumerate(steps):
             self.saved = {}
             self.warnings = []
+            why = step_writes(step)
+            if why and not self.allow_writes:
+                self.stopped = {"before": step["id"], "reason": f"writes data ({why})"}
+                print(f"[{step['id']}] not run: {self.stopped['reason']}; pass --allow-writes to run it in a dry-run")
+                break
             # Titles render leniently; actions/expectations render right before use so a value saved
             # earlier in the same step is available to the next action or check.
             step = {**step, **render({k: step[k] for k in ("title", "subtitle") if k in step}, self.vars)}
@@ -609,17 +847,35 @@ class Runner:
             for key in ("case", "layout", "split_with"):
                 if step.get(key):
                     rec[key] = step[key]
+            if why:
+                rec["writes"] = why
+                self.wrote.append(step["id"])
             try:
                 self.annotate(tab, [])
-                if any("no_console_errors" in e for e in step.get("expect", [])):
+                inline = [e for a in step.get("actions", []) for e in _listify(a.get("expect"))]
+                if any("no_console_errors" in e for e in [*step.get("expect", []), *inline]):
                     self.console_since[tab] = self.console_cursor(tab)
+                mark = self.diag_start(tab)
                 self.apply_privacy(tab)
                 follow = step.get("zoom") == "follow" or (not step.get("zoom") and self.camera == "follow")
+                halted = False
                 for action in step.get("actions", []):
+                    if "expect" in action:
+                        # A check between actions, e.g. before a tab switch unmounts what it looks at.
+                        for exp in _listify(action["expect"]):
+                            rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
+                        if not all(c["ok"] for c in rec["checks"]):
+                            halted = True
+                            break
+                        continue
                     self.tracked_action(tab, render(action, self.vars, strict=True), rec, follow)
                     self.apply_privacy(tab)
-                for exp in step.get("expect", []):
-                    rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
+                if not halted:
+                    for x in _listify(step.get("save")):
+                        self.save(tab, render(x, self.vars, strict=True))
+                    for exp in step.get("expect", []):
+                        rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
+                self.diag_end(tab, mark, rec)
                 rec["status"] = "passed" if all(c["ok"] for c in rec["checks"]) else "failed"
                 if follow and rec.get("camera"):
                     rec["zoom"] = {"follow": rec.pop("camera"), **({"factor": self.camera_factor})}
@@ -655,17 +911,67 @@ class Runner:
                     print(f"     expect {c['type']} {c['expected']} -> actual {c['actual']!r}")
             if rec["status"] != "passed" and self.stop_on_fail:
                 break
+            if _matches(step["id"], self.until) and not (
+                i + 1 < len(steps) and _matches(steps[i + 1]["id"], self.until)
+            ):
+                self.stopped = {"after": step["id"], "reason": "--until"}
+                break
         self.close_segment()
         return results
 
 
-def run(scenario, out_dir, record, session=None, scope="tirai", hold=None, driver=None):
-    """Run `scenario` and write timeline.json into `out_dir`; returns the timeline dict."""
+def previous_vars(out_dir):
+    """Values saved by an earlier run into the same folder (for --from-step)."""
+    f = Path(out_dir) / "timeline.json"
+    if not f.is_file():
+        return {}
+    try:
+        tl = json.loads(f.read_text(encoding="utf-8"))
+    except ValueError:
+        return {}
+    found = dict(tl.get("resumed_vars") or {})
+    found.update({k: v for st in tl.get("steps", []) for k, v in (st.get("saved") or {}).items()})
+    return found
+
+
+def run(
+    scenario,
+    out_dir,
+    record,
+    session=None,
+    scope="tirai",
+    hold=None,
+    driver=None,
+    allow_writes=None,
+    until=None,
+    from_step=None,
+    keep_session=False,
+    fresh=False,
+):
+    """Run `scenario` and write timeline.json into `out_dir`; returns the timeline dict.
+
+    A dry-run stops before the first step that writes data unless `allow_writes`; a recording always runs it.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     settings = scenario.get("settings") or {}
     hold = hold if hold is not None else float(settings.get("hold", 2.5) if record else 0.3)
-    r = Runner(scenario, out, session, record, hold, stop_on_fail=record, scope=scope, driver=driver)
+    r = Runner(
+        scenario,
+        out,
+        session,
+        record,
+        hold,
+        stop_on_fail=record,
+        scope=scope,
+        driver=driver,
+        allow_writes=record or bool(allow_writes),
+        until=until,
+        from_step=from_step,
+        keep_session=keep_session,
+        fresh=fresh,
+        resume_vars=previous_vars(out) if from_step else None,
+    )
     steps = r.run()
     timeline = {
         "scenario": scenario["name"],
@@ -677,7 +983,12 @@ def run(scenario, out_dir, record, session=None, scope="tirai", hold=None, drive
         "tabs": {k: {"label": v.get("label", k)} for k, v in scenario["tabs"].items()},
         "segments": r.segments,
         "steps": steps,
-        "total_steps": len(scenario["steps"]),
+        "total_steps": len(r.planned()),
+        **({"stopped": r.stopped} if r.stopped else {}),
+        **({"from_step": from_step, "resumed_vars": r.resumed} if from_step else {}),
+        **({"cleanup": r.cleanup_results} if r.cleanup_results else {}),
+        "hold": hold,
+        **({"trim_still": True} if settings.get("trim_still") else {}),
     }
     (out / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8")
     return timeline

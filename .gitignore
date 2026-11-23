@@ -19,3 +19,6 @@ evidence/
 Thumbs.db
 .vscode/
 .idea/
+
+# tirai: secrets and generated evidence
+**/.env

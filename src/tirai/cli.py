@@ -45,8 +45,53 @@ def load_env(args):
         load_env_file(path)
 
 
+def env_file_unignored(scenario):
+    """The .env next to the scenario when it sits in a git work tree without being ignored."""
+    from tirai.system import find_bin, run_text
+
+    env = Path(scenario).resolve().parent / ".env"
+    git = find_bin("git")
+    if not env.is_file() or not git:
+        return None
+    inside = run_text([git, "-C", str(env.parent), "rev-parse", "--is-inside-work-tree"], timeout=10)
+    if inside.returncode != 0:
+        return None
+    ignored = run_text([git, "-C", str(env.parent), "check-ignore", "-q", str(env)], timeout=10)
+    return env if ignored.returncode != 0 else None
+
+
+def comma_selectors(sc):
+    """Selectors written as a CSS list ('a, b'): the driver takes the first match in page order, not in list order."""
+    from tirai.scenario import _selectors
+
+    found = []
+    for st in sc["steps"]:
+        for item in [*(st.get("actions") or []), *(st.get("expect") or [])]:
+            found += [(st["id"], x) for x in _selectors(item) if "," in x and not x.startswith("[data-tirai-id")]
+    return found
+
+
+def check_databases(sc):
+    from tirai import db
+    from tirai.scenario import ScenarioError, interpolate
+
+    for name, cfg in (sc.get("databases") or {}).items():
+        try:
+            ro, detail = db.write_access(interpolate(cfg["dsn"]))
+        except (ScenarioError, ImportError) as e:
+            print(f"db {name}: not checked ({e})")
+            continue
+        except Exception as e:  # noqa: BLE001 - connection problems are reported, not fatal
+            print(f"db {name}: not checked ({str(e).splitlines()[0][:120]})")
+            continue
+        if ro is False:
+            print(f"warning: db {name} is not read-only ({detail}); use a read-only user for expect: db")
+        elif ro:
+            print(f"db {name}: read-only ({detail})")
+
+
 def cmd_validate(args):
-    from tirai.scenario import ScenarioError, env_vars, load
+    from tirai.scenario import ScenarioError, env_vars, load, step_writes
 
     load_env(args)
     try:
@@ -58,6 +103,17 @@ def cmd_validate(args):
     needed = sorted(env_vars(sc))
     if needed:
         print("env vars: " + ", ".join(needed))
+    writes = [(st["id"], step_writes(st)) for st in sc["steps"] if step_writes(st)]
+    if writes:
+        print("writes data: " + "; ".join(f"{i} ({w})" for i, w in writes))
+        print("  a dry-run stops before the first of these unless --allow-writes; use cleanup: to undo them")
+    for sid, sel in comma_selectors(sc):
+        print(f"warning: {sid}: {sel!r} is a CSS list; the first match in page order wins. Prefer targets: fallbacks")
+    env = env_file_unignored(args.scenario)
+    if env:
+        print(f"warning: {env} holds secrets but git does not ignore it; add it to .gitignore (tirai init does)")
+    if not args.no_db_check:
+        check_databases(sc)
     return 0
 
 
@@ -65,7 +121,19 @@ def _summary(tl):
     steps = tl["steps"]
     failed = [s["id"] for s in steps if s["status"] != "passed"]
     print(f"\n{len(steps) - len(failed)}/{tl['total_steps']} steps passed" + (f"; failing: {failed}" if failed else ""))
-    return 1 if failed or len(steps) < tl["total_steps"] else 0
+    for s in steps:
+        if s.get("failed_requests") or s.get("console_errors"):
+            n = len(s.get("failed_requests") or []) + len(s.get("console_errors") or [])
+            print(f"  note: {s['id']} had {n} failed request(s)/console error(s); see timeline.json")
+    stop = tl.get("stopped")
+    if stop and "before" in stop:
+        print(f"stopped before {stop['before']}: {stop['reason']}; the steps before it ran (--allow-writes runs all)")
+    elif stop:
+        print(f"stopped after {stop['after']} ({stop['reason']})")
+    for c in tl.get("cleanup") or []:
+        if c["status"] != "passed":
+            print(f"cleanup {c['id']} {c['status']}: {c.get('error') or 'expectation failed'}")
+    return 1 if failed or (len(steps) < tl["total_steps"] and not stop) else 0
 
 
 def cmd_run(args):
@@ -83,9 +151,26 @@ def cmd_run(args):
         os.environ["TIRAI_HEADED"] = "1"
     from tirai.bsk import DriverError
 
+    if args.record and (args.from_step or args.until):
+        print("--from-step/--until are for dry-runs; a recording always covers the whole scenario")
+        return 2
+    if args.from_step and not args.session:
+        print("--from-step needs --session <name> (keep one with --keep-session) so the page state carries over")
+        return 2
     try:
         tl = runner.run(
-            sc, out, record=args.record, session=args.session, scope=args.scope, hold=args.hold, driver=args.driver
+            sc,
+            out,
+            record=args.record,
+            session=args.session,
+            scope=args.scope,
+            hold=args.hold,
+            driver=args.driver,
+            allow_writes=args.allow_writes,
+            until=args.until,
+            from_step=args.from_step,
+            keep_session=args.keep_session,
+            fresh=args.fresh,
         )
     except (DriverError, RuntimeError, ScenarioError, OSError) as e:
         print(f"error: {e}")
@@ -131,6 +216,7 @@ def cmd_compose(args):
         title_seconds=args.title_seconds,
         lang=args.lang,
         voice=args.voice or os.environ.get("TIRAI_TTS"),
+        trim_still=args.trim_still,
     )
     print(f"final video: {final} ({seconds:.1f}s)")
     return 0
@@ -139,12 +225,15 @@ def cmd_compose(args):
 def cmd_record(args):
     """dry-run -> record -> compose; stops at the first phase that fails unless --record-failures."""
     args.record = False
+    args.until = args.from_step = None
+    keep, args.keep_session = args.keep_session, False
     if not args.skip_dry_run and cmd_run(args):
         if not args.record_failures:
             print("dry-run failed; fix the scenario before recording (or pass --record-failures for bug evidence)")
             return 1
         print("dry-run failed; recording anyway up to the first failing step (--record-failures)")
     args.record = True
+    args.keep_session = keep
     failed = cmd_run(args)
     if failed and not args.record_failures:
         return 1
@@ -423,6 +512,29 @@ def cmd_mcp(_args):
     return 0
 
 
+GITIGNORE = ["# tirai: secrets and generated evidence", "**/.env", "evidence/"]
+
+
+def ensure_gitignore(dest):
+    """Add TIRAI's ignore lines to the .gitignore of the repo holding `dest` (or the current folder)."""
+    from tirai.system import find_bin, run_text
+
+    git, root = find_bin("git"), Path.cwd()
+    if git:
+        p = run_text([git, "-C", str(dest.parent), "rev-parse", "--show-toplevel"], timeout=10)
+        if p.returncode == 0 and p.stdout.strip():
+            root = Path(p.stdout.strip())
+    gi = root / ".gitignore"
+    have = gi.read_text(encoding="utf-8").splitlines() if gi.is_file() else []
+    missing = [ln for ln in GITIGNORE[1:] if ln not in have]
+    if not missing:
+        return None
+    text = "\n".join(have)
+    text = (text + "\n\n" if text.strip() else "") + "\n".join([GITIGNORE[0], *missing]) + "\n"
+    gi.write_text(text, encoding="utf-8")
+    return gi, missing
+
+
 def cmd_init(args):
     dest = Path(args.path)
     if dest.exists() and not args.force:
@@ -431,6 +543,9 @@ def cmd_init(args):
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(TEMPLATE, dest)
     print(f"wrote {dest}")
+    added = ensure_gitignore(dest)
+    if added:
+        print(f"updated {added[0]}: ignores {', '.join(added[1])} (keep secrets in .env, never commit them)")
     return 0
 
 
@@ -488,6 +603,7 @@ def build_parser():
     s = sub.add_parser("validate", help="validate a scenario file")
     s.add_argument("scenario")
     s.add_argument("--env-file", help="KEY=VALUE file (default: .env next to the scenario)")
+    s.add_argument("--no-db-check", action="store_true", help="don't connect to check the DSNs are read-only")
     s.set_defaults(fn=cmd_validate)
 
     def run_opts(s):
@@ -499,6 +615,15 @@ def build_parser():
         s.add_argument("--session", help="reuse a live driver session instead of opening a fresh one")
         s.add_argument("--scope", default="tirai", help="session name prefix for the fresh session")
         s.add_argument("--hold", type=float, help="seconds each step stays on screen")
+        s.add_argument("--fresh", action="store_true", help="clear cookies and storage before tab setup (clean login)")
+        s.add_argument(
+            "--keep-session", action="store_true", help="leave the browser session open afterwards (for --from-step)"
+        )
+        s.add_argument(
+            "--allow-writes", action="store_true", help="dry-run: also run steps that write data (writes:, write SQL)"
+        )
+        s.add_argument("--until", metavar="STEP", help="dry-run: stop after this step")
+        s.add_argument("--from-step", metavar="STEP", help="dry-run: start at this step in --session's open page")
 
     def compose_opts(s):
         s.add_argument("--output", help="final video path (default: <timeline dir>/final.mp4)")
@@ -511,6 +636,11 @@ def build_parser():
             const="auto",
             choices=["auto", "say", "sapi", "espeak", "cmd"],
             help="read each subtitle aloud (OS speech engine) and add it as the video's audio track",
+        )
+        s.add_argument(
+            "--trim-still",
+            action="store_true",
+            help="fast-forward (8x, badge shown) stretches where the screen does not change for 2 s or more",
         )
 
     s = sub.add_parser("run", help="run a scenario (--dry-run or --record)")
@@ -637,4 +767,13 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    sys.exit(args.fn(args))
+    try:
+        code = args.fn(args)
+    except KeyboardInterrupt:
+        code = 130
+    except Exception as e:  # noqa: BLE001 - a tester gets one line; TIRAI_DEBUG=1 shows the traceback
+        if os.environ.get("TIRAI_DEBUG"):
+            raise
+        print(f"error: {e.__class__.__name__}: {e}\n(set TIRAI_DEBUG=1 for the traceback)", file=sys.stderr)
+        code = 1
+    sys.exit(code)
