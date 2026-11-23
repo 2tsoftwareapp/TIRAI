@@ -71,13 +71,13 @@ Key facts for agents:
 
 ```text
 usage: tirai [-h] [--version]
-             {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,dbx,dbx-connect,mcp,annotate-js}
+             {doctor,setup,init,validate,run,compose,record,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
              ...
 
 Scenario-driven test evidence recorder
 
 positional arguments:
-  {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,dbx,dbx-connect,mcp,annotate-js}
+  {doctor,setup,init,validate,run,compose,record,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
     doctor              check ffmpeg, BrowserSkill, fonts and optional drivers
     setup               install what is missing (ffmpeg, agent-browser, DBX, skills); reuses tools
                         already here
@@ -87,8 +87,14 @@ positional arguments:
     compose             build final.mp4 + subtitles + report from a recorded timeline
     record              dry-run, record, then compose in one go
     install-skill       install the tirai-evidence skill for an agent
-    verify              check an evidence folder against its manifest.sha256
+    export              write junit.xml, xray.json, testrail.csv from an evidence folder (no
+                        upload)
+    scan-pii            OCR the final video for PII the page masking missed (--fix blurs it)
+    index               one HTML page listing every evidence folder found under DIRS
+    sign                sign manifest.sha256 with an SSH key (+ optional RFC 3161 timestamp)
+    verify              check an evidence folder against its manifest.sha256 (and signature)
     from-trace          convert a `bsk record` trace into a scenario
+    from-spec           draft a scenario from a Gherkin .feature, Markdown table or CSV test cases
     capture             record a flow you click through once and turn it into a scenario
     dbx                 start DBX web (installed by `tirai setup`, else Docker)
     dbx-connect         create/update a DBX web connection from a DSN (no manual DBX setup)
@@ -159,7 +165,7 @@ options:
   --record
 
 usage: tirai compose [-h] [--output OUTPUT] [--lead LEAD] [--title-seconds TITLE_SECONDS]
-                     [--lang LANG]
+                     [--lang LANG] [--voice [{auto,say,sapi,espeak,cmd}]]
                      timeline
 
 positional arguments:
@@ -171,11 +177,14 @@ options:
   --lead LEAD           seconds kept before each step starts
   --title-seconds TITLE_SECONDS
   --lang LANG           subtitle language to burn in (from per-step subtitle maps)
+  --voice [{auto,say,sapi,espeak,cmd}]
+                        read each subtitle aloud (OS speech engine) and add it as the video's
+                        audio track
 
 usage: tirai record [-h] [--env-file ENV_FILE] [--out OUT] [--driver {agent-browser,bsk}]
                     [--headed] [--session SESSION] [--scope SCOPE] [--hold HOLD] [--output OUTPUT]
-                    [--lead LEAD] [--title-seconds TITLE_SECONDS] [--lang LANG] [--skip-dry-run]
-                    [--record-failures]
+                    [--lead LEAD] [--title-seconds TITLE_SECONDS] [--lang LANG]
+                    [--voice [{auto,say,sapi,espeak,cmd}]] [--skip-dry-run] [--record-failures]
                     scenario
 
 positional arguments:
@@ -195,6 +204,9 @@ options:
   --lead LEAD           seconds kept before each step starts
   --title-seconds TITLE_SECONDS
   --lang LANG           subtitle language to burn in (from per-step subtitle maps)
+  --voice [{auto,say,sapi,espeak,cmd}]
+                        read each subtitle aloud (OS speech engine) and add it as the video's
+                        audio track
   --skip-dry-run
   --record-failures     record and compose even when a step fails (bug evidence)
 
@@ -208,13 +220,72 @@ options:
   --dest DEST           explicit skills directory (overrides --agent paths)
   --force
 
-usage: tirai verify [-h] [dir]
+usage: tirai export [-h] [--format FORMAT [FORMAT ...]] [--test-key TEST_KEY]
+                    [--project-key PROJECT_KEY] [--case-id CASE_ID]
+                    [dir]
 
 positional arguments:
   dir
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help            show this help message and exit
+  --format FORMAT [FORMAT ...], -f FORMAT [FORMAT ...]
+                        junit, xray, testrail (default all)
+  --test-key TEST_KEY   Xray: existing Jira test issue key (else a new Manual test is described)
+  --project-key PROJECT_KEY
+                        Xray: Jira project key for a new test
+  --case-id CASE_ID     TestRail: case id (e.g. C123) for every row
+
+usage: tirai scan-pii [-h] [--rules RULES [RULES ...]] [--pattern PATTERN] [--keep KEEP]
+                      [--every EVERY] [--lang LANG] [--fix]
+                      [dir]
+
+positional arguments:
+  dir                   evidence folder or a video file
+
+options:
+  -h, --help            show this help message and exit
+  --rules RULES [RULES ...]
+                        email, phone, card, token (default all)
+  --pattern PATTERN     extra regex (repeatable)
+  --keep KEEP           exact text allowed to stay visible (repeatable)
+  --every EVERY         seconds between sampled frames
+  --lang LANG           tesseract language(s), e.g. eng+vie
+  --fix                 blur every hit in the video and refresh the manifest
+
+usage: tirai index [-h] [--out OUT] [dirs ...]
+
+positional arguments:
+  dirs
+
+options:
+  -h, --help         show this help message and exit
+  --out OUT, -o OUT
+
+usage: tirai sign [-h] [--key KEY] [--tsa [TSA]] [dir]
+
+positional arguments:
+  dir
+
+options:
+  -h, --help   show this help message and exit
+  --key KEY    SSH private key (default $TIRAI_SIGN_KEY)
+  --tsa [TSA]  add an RFC 3161 timestamp (default TSA freetsa.org, or give a URL)
+
+usage: tirai verify [-h] [--pubkey PUBKEY] [--allowed-signers ALLOWED_SIGNERS]
+                    [--identity IDENTITY] [--tsa-ca TSA_CA]
+                    [dir]
+
+positional arguments:
+  dir
+
+options:
+  -h, --help            show this help message and exit
+  --pubkey PUBKEY       trusted SSH public key the manifest must be signed with
+  --allowed-signers ALLOWED_SIGNERS
+                        ssh allowed_signers file (with --identity)
+  --identity IDENTITY   signer identity in the allowed_signers file
+  --tsa-ca TSA_CA       TSA CA certificate to verify the timestamp chain
 
 usage: tirai from-trace [-h] [-o OUTPUT] [--no-resolve] [--scope SCOPE] trace
 
@@ -227,6 +298,17 @@ options:
                         scenario file to write
   --no-resolve          skip the replay that resolves CSS selectors
   --scope SCOPE         bsk scope for the resolving replay
+
+usage: tirai from-spec [-h] [--output OUTPUT] [--url URL] spec
+
+positional arguments:
+  spec
+
+options:
+  -h, --help            show this help message and exit
+  --output OUTPUT, -o OUTPUT
+                        default: <spec>.yaml
+  --url URL             resolve element names to selectors on this live page (agent-browser)
 
 usage: tirai capture [-h] [--driver {agent-browser,bsk}] [--timeout TIMEOUT] [--purpose PURPOSE]
                      [--trace-dir TRACE_DIR] [-o OUTPUT] [--no-resolve] [--scope SCOPE]
@@ -497,6 +579,38 @@ steps:
 | `zoom: "#email"` | step | eases in (≈0.6 s) on the element and holds; factor defaults to 1.8, capped so the target fits |
 | `layout: split` | step | left: last frame of the previous step (or `split_with`), right: this step; useful for UI → DB proof |
 | `--lang vi` | `tirai record` / `compose` | burns that subtitle language; every language is also written as `subtitles.<lang>.srt` |
+| `zoom: follow` | step | zooms in and pans from one action target (click, fill, select…) to the next |
+| `camera: follow` | `settings:` | `zoom: follow` for every step without its own `zoom:`; `camera_factor` (default 1.6) sets the zoom |
+| `fast_forward: 4` | `settings:` | `wait`/`wait_for` longer than 1.5 s play at 4× with a "4x" badge (default 4; `0` turns it off) |
+| `--voice` | `tirai compose` | reads each subtitle aloud (macOS `say`, Windows SAPI, Linux `espeak-ng`, or `$TIRAI_TTS_CMD` with `{text}` `{out}` `{lang}`); a clip is held until its speech ends |
+
+## Desktop apps (agent-desktop)
+
+A tab with `app:` instead of `url:` drives a native app through the OS accessibility tree
+([agent-desktop](https://github.com/vercel-labs/agent-desktop): macOS AX, Windows UI Automation, Linux AT-SPI) and
+records the screen around its window with ffmpeg. Browser and desktop tabs can be mixed in one scenario.
+
+```yaml
+tabs:
+  calc: { app: gnome-calculator, label: Calculator }   # name: overrides the name used to find the app
+steps:
+  - id: S1
+    tab: calc
+    title: 7 + 8 = 15
+    actions:
+      - click: "button:7"                              # role:name (exact name) or a bare accessible name
+      - click: "button:+"
+      - click: "button:8"
+      - click: "button:="
+    expect:
+      - text_contains: { selector: { role: textfield }, text: "15" }   # mapping = agent-desktop find filters
+```
+
+Actions: `click`, `fill` (set-value, falls back to clear + type), `press`, `select`, `hover`, `scroll`, `wait`,
+`wait_for`. Expectations: `visible`, `not_visible`, `text_contains`, `text_matches`, `value`. `annotate:` and
+`privacy:` masking are browser-only (use `privacy.ocr` to scan the final video). Install with
+`tirai setup --only agent-desktop`. Needs: Linux X11 with AT-SPI (agent-desktop supports Ubuntu 24.04+) and a
+window manager; macOS Accessibility + Screen Recording permission for the terminal; Windows desktop session.
 
 ## Subtitles in several languages
 
@@ -525,7 +639,21 @@ privacy:
 Matches are covered with an opaque box in the page (so screenshots and video both hide them) and stay covered
 while the DOM changes. With agent-browser the mask is registered as a page init script, so it is active before the page's own scripts on every load; it is also re-applied after every navigation, click and action. Set `privacy: false` on a
 tab to skip it. Limitations: text drawn on a canvas (e.g. DBX result cells) is not scanned — cover those with an
-`annotate: blur` grid target — and values in step titles, subtitles or `save`d variables are not rewritten.
+`annotate: blur` grid target, or let the OCR pass below catch them — and values in step titles, subtitles or
+`save`d variables are not rewritten.
+
+### OCR pass over the final video
+
+```yaml
+privacy:
+  mask: [email, phone]
+  ocr: fix          # off (default) | warn | fix (pixelate hits and rewrite final.mp4) | fail (exit non-zero)
+```
+
+After composing, frames are sampled (1/s) and read with tesseract (`tirai setup --only ocr`), so text drawn on a
+canvas (DBX grids, images, desktop apps) is checked against the same rules; `keep:` still applies. Hits are
+reported masked with time and box. On demand: `tirai scan-pii evidence/record [--rules email phone] [--fix]`.
+OCR can misread UI text as an email-like string, so review `warn` hits before relying on them.
 
 ---
 
@@ -591,6 +719,9 @@ Nothing is tied to one OS or install location. Every external tool, font and tim
 | `TIRAI_DRIVER` | `agent-browser` if installed, else `bsk` | browser driver (scenario `driver:` and `--driver` win) |
 | `TIRAI_HEADED` | off | show the agent-browser window (same as `--headed`) |
 | `TIRAI_CURSOR` | `1` | draw agent-browser's animated cursor in recordings |
+| `TIRAI_SIGN_KEY` | unset | SSH private key; `compose` re-signs `manifest.sha256` with it after rebuilding |
+| `TIRAI_TTS_CMD` | unset | custom voice command for `--voice`, e.g. `piper --output_file {out}` (`{text}`, `{out}`, `{lang}`) |
+| `AGENT_DESKTOP_BIN` / `AGENT_BROWSER_BIN` | PATH, `~/.tirai/bin` | explicit driver binaries |
 | `TIRAI_AGENT_BROWSER_VERSION` | `0.43.0` | agent-browser release `tirai setup` downloads (pinned digest only for the default) |
 | `TIRAI_DBX_VERSION` | `0.6.72` | DBX web release `tirai setup` downloads |
 | `TIRAI_ALLOW_UNVERIFIED` | unset | `1` accepts a setup download whose SHA-256 is unknown |
@@ -622,6 +753,9 @@ settings:
   hold: 2.5            # seconds each recorded step stays on screen
   timing_scale: 1.0    # same as TIRAI_TIMING_SCALE (env wins)
   expect_timeout: 6    # same as TIRAI_EXPECT_TIMEOUT (env wins)
+  camera: follow       # zoom + pan to each action target (or per step: zoom: follow)
+  camera_factor: 1.6
+  fast_forward: 4      # speed of long waits in the video; 0 = real time
 ```
 
 ## DBX tab overrides
@@ -841,6 +975,16 @@ tirai record <file>            # dry-run again, record, then compose
 Outputs in `evidence/record/`: `final.mp4`, `subtitles.srt`, `report.md`, `report.html`, `report.xlsx`,
 `timeline.final.json`, `manifest.sha256`, per-tab `seg-*.mp4` and `step-*.png`. To document a bug, record the
 failing run with `tirai record <file> --record-failures` (stops after the first failing step, FAIL in the header). Re-compose without re-recording: `tirai compose evidence/record/timeline.json`.
+
+Optional extras: `tirai compose evidence/record/timeline.json --voice` (spoken subtitles),
+`tirai scan-pii evidence/record --fix` (OCR pass for PII drawn on canvas), `tirai sign evidence/record --key
+~/.ssh/id_ed25519 [--tsa]` then `tirai verify evidence/record --pubkey ~/.ssh/id_ed25519.pub`,
+`tirai export evidence/record --format junit xray testrail` (import files only, nothing is uploaded),
+`tirai index evidence/ -o evidence/index.html` (one page for many runs).
+
+To start from a written spec: `tirai from-spec login.feature --url <app url>` drafts the YAML (Gherkin, Markdown
+or CSV tables); review every `TODO(...)` selector and the "not converted" lines with the user before recording.
+Desktop apps: use a tab with `app:` (see docs/scenario-format.md, "Desktop apps").
 
 ## 4. Hand over
 

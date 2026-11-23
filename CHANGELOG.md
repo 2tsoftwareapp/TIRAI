@@ -6,6 +6,19 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 
 ## [Unreleased]
 
+### Added
+
+- Desktop apps: tabs with `app:` are driven by agent-desktop (accessibility tree) and recorded with ffmpeg screen
+  capture; mix them with browser tabs. `tirai setup --only agent-desktop` installs the pinned, checksummed CLI.
+- Video: `zoom: follow` / `settings.camera: follow` (zoom and pan between action targets) and fast-forwarded
+  waits (`settings.fast_forward`, "4x" badge).
+- `--voice` narration on `tirai compose` (say / SAPI / espeak-ng / `TIRAI_TTS_CMD`).
+- OCR PII pass: `privacy.ocr: warn|fix|fail` and `tirai scan-pii [--fix]` (tesseract, `tirai setup --only ocr`).
+- `junit.xml` with every recording; `tirai export` adds Xray JSON and TestRail CSV import files (no upload).
+- `tirai sign` (SSH signature over `manifest.sha256`, optional RFC 3161 timestamp); `tirai verify --pubkey`.
+- `tirai index`: one filterable HTML page across evidence runs.
+- `tirai from-spec`: draft scenarios from Gherkin, Markdown or CSV test cases, with live selector resolution.
+
 ### Fixed
 
 - `tirai setup` reuses tools already on the machine instead of asking to install them again: a DBX web already

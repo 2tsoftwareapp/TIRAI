@@ -72,6 +72,16 @@ Outputs in `evidence/record/`: `final.mp4`, `subtitles.srt`, `report.md`, `repor
 `timeline.final.json`, `manifest.sha256`, per-tab `seg-*.mp4` and `step-*.png`. To document a bug, record the
 failing run with `tirai record <file> --record-failures` (stops after the first failing step, FAIL in the header). Re-compose without re-recording: `tirai compose evidence/record/timeline.json`.
 
+Optional extras: `tirai compose evidence/record/timeline.json --voice` (spoken subtitles),
+`tirai scan-pii evidence/record --fix` (OCR pass for PII drawn on canvas), `tirai sign evidence/record --key
+~/.ssh/id_ed25519 [--tsa]` then `tirai verify evidence/record --pubkey ~/.ssh/id_ed25519.pub`,
+`tirai export evidence/record --format junit xray testrail` (import files only, nothing is uploaded),
+`tirai index evidence/ -o evidence/index.html` (one page for many runs).
+
+To start from a written spec: `tirai from-spec login.feature --url <app url>` drafts the YAML (Gherkin, Markdown
+or CSV tables); review every `TODO(...)` selector and the "not converted" lines with the user before recording.
+Desktop apps: use a tab with `app:` (see docs/scenario-format.md, "Desktop apps").
+
 ## 4. Hand over
 
 Give the user `final.mp4`, `report.html` (or `report.xlsx`) and `manifest.sha256`; `tirai verify` proves the files are unchanged. Check a few frames first
