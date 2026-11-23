@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 from tirai.bsk import DriverError
-from tirai.system import agent_browser_bin, run_text
+from tirai.system import agent_browser_bin, run_text, tool_env
 
 
 class AgentBrowserError(DriverError):
@@ -63,7 +63,7 @@ class AgentBrowser:
                 f = Path(self._init_dir) / f"init-{i}.js"
                 f.write_text(src, encoding="utf-8")
                 cmd += ["--init-script", str(f)]
-        p = run_text([*cmd, *args], timeout=timeout, input=stdin)
+        p = run_text([*cmd, *args], timeout=timeout, input=stdin, env=tool_env())
         out = p.stdout.strip()
         try:
             data = json.loads(out.splitlines()[-1]) if out else {}
@@ -77,7 +77,7 @@ class AgentBrowser:
     def open_session(self, url, scope):
         """Fresh session (own daemon + browser) named after `scope`; returns the first tab id."""
         self.session = re.sub(r"[^\w-]", "-", f"{scope}-{os.getpid()}")
-        run_text([_bin(), "--session", self.session, "close"], timeout=60)
+        run_text([_bin(), "--session", self.session, "close"], timeout=60, env=tool_env())
         self.run("open", url, launch=True, timeout=180)
         tabs = self.run("tab", "list").get("tabs", [])
         self.active = next((t["tabId"] for t in tabs if t.get("active")), "t1")
@@ -85,7 +85,7 @@ class AgentBrowser:
 
     def close_session(self):
         if self.session:
-            run_text([_bin(), "--session", self.session, "close"], timeout=60)
+            run_text([_bin(), "--session", self.session, "close"], timeout=60, env=tool_env())
         if self._init_dir:
             shutil.rmtree(self._init_dir, ignore_errors=True)
             self._init_dir = None

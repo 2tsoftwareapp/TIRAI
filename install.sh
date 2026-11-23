@@ -125,8 +125,28 @@ install_source() {
   TIRAI_EXE="$TIRAI_HOME/venv/bin/tirai"
 }
 
+# Re-running the installer keeps an existing tirai of the same version (TIRAI_FORCE=1 reinstalls).
+latest_version() {
+  if [ -n "${TIRAI_VERSION:-}" ]; then printf '%s' "${TIRAI_VERSION#v}"; return 0; fi
+  tmp="$(mktemp)"
+  fetch "https://raw.githubusercontent.com/${REPO}/${REF}/pyproject.toml" "$tmp" 2>/dev/null \
+    && sed -n 's/^version = "\(.*\)"/\1/p' "$tmp" | head -n 1
+  rm -f "$tmp"
+}
+current_version() {
+  [ -x "$BIN_DIR/tirai" ] && "$BIN_DIR/tirai" --version 2>/dev/null | sed -n 's/^tirai //p'
+}
+
 TIRAI_EXE=""
+have="$(current_version || true)"
+want="$(latest_version || true)"
+if [ "${TIRAI_FORCE:-0}" != "1" ] && [ -n "$have" ] && [ "$have" = "$want" ] && [ -z "${TIRAI_BINARY:-}${TIRAI_SOURCE:-}" ]; then
+  log "tirai ${have} is already installed (${BIN_DIR}/tirai); skipping reinstall (TIRAI_FORCE=1 to force)"
+  MODE=keep
+  TIRAI_EXE="$(readlink "$BIN_DIR/tirai" 2>/dev/null || printf '%s' "$BIN_DIR/tirai")"
+fi
 case "$MODE" in
+  keep) ;;
   binary) install_binary || die "Binary install failed (try --source)." ;;
   source) install_source ;;
   auto) install_binary || { log "Falling back to building from source"; install_source; } ;;

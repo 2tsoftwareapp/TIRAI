@@ -20,14 +20,16 @@ The installer works on any machine, with or without Python:
 | **From source** (fallback, or `--source`) | no binary for this machine | Python ≥ 3.10 on the machine → `~/.tirai/venv`; otherwise it downloads [uv](https://docs.astral.sh/uv/) and a private Python 3.12 into `~/.tirai` (system Python is never touched) |
 
 Force a method with `sh install.sh --binary|--source` (PowerShell: `./install.ps1 --binary|--source`) or
-`TIRAI_INSTALL_MODE`. `tirai` is linked into `~/.local/bin`, then `tirai setup` installs, for this OS:
+`TIRAI_INSTALL_MODE`. Re-running the installer keeps an installed `tirai` of the same version (`TIRAI_FORCE=1`
+reinstalls). `tirai` is linked into `~/.local/bin`, then `tirai setup` reuses what is already on the machine and
+installs only what is missing:
 
 | Tool | How | Where |
 |---|---|---|
-| ffmpeg ≥ 6.0 | kept if already new enough; otherwise a static [BtbN](https://github.com/BtbN/FFmpeg-Builds) 8.1 build (Linux, Windows) or `brew install ffmpeg` (macOS). ffmpeg 4.4 breaks agent-browser recording | `~/.tirai/bin` |
-| [agent-browser](https://github.com/vercel-labs/agent-browser) | release binary, then `agent-browser install` (Chrome for Testing; `--with-deps` on Linux) | `~/.tirai/bin` |
-| [DBX web](https://github.com/t8y2/dbx) | `browser-static` release package, SHA-256 checked (Linux x64/arm64, Windows x64); Docker image `t8y2/dbx` elsewhere | `~/.tirai/dbx` |
-| BrowserSkill CLI | official installer (only needed for `driver: bsk`) | `~/.local/bin` |
+| ffmpeg ≥ 6.0 | any ffmpeg ≥ 6.0 on PATH or in Homebrew/Linuxbrew/snap dirs is used; otherwise a static [BtbN](https://github.com/BtbN/FFmpeg-Builds) 8.1 build (Linux, Windows) or `brew install ffmpeg` (macOS). ffmpeg 4.4 breaks agent-browser recording | `~/.tirai/bin` |
+| [agent-browser](https://github.com/vercel-labs/agent-browser) | kept if on PATH / `~/.local/bin`; else release binary. Chrome for Testing only if `agent-browser doctor` finds none; Linux libraries (`--with-deps`, sudo) only if Chrome fails to start | `~/.tirai/bin` |
+| [DBX web](https://github.com/t8y2/dbx) | kept if a DBX web answers on `DBX_URL` / port 4224, `dbx-web` is on PATH, or a `t8y2/dbx` container/image exists; else `browser-static` release package, SHA-256 checked (Linux x64/arm64, Windows x64), Docker image elsewhere | `~/.tirai/dbx` |
+| BrowserSkill CLI | kept if installed; offered only when agent-browser is missing or with `tirai setup --only browserskill` | `~/.local/bin` |
 
 Skip any of them with `--skip ffmpeg,agent-browser,dbx,browserskill,skills`. Then:
 

@@ -1,5 +1,6 @@
 """Cross-platform discovery of external tools and fonts (Linux, macOS, Windows)."""
 
+import functools
 import os
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ IS_MAC = sys.platform == "darwin"
 HOME = Path.home()
 TIRAI_HOME = Path(os.environ.get("TIRAI_HOME") or HOME / ".tirai")
 TIRAI_BIN = TIRAI_HOME / "bin"  # tools `tirai setup` downloads (ffmpeg, agent-browser)
+DBX_IMAGE = "t8y2/dbx"
 MIN_FFMPEG = (6, 0)  # agent-browser recording fails with ffmpeg 4.4; 7.0 verified
 
 
@@ -50,13 +52,72 @@ def dbx_web_dir():
 
 
 def dbx_web_bin():
-    """dbx-web server binary from the DBX browser-static package installed by `tirai setup`."""
+    """DBX_WEB_BIN, the browser-static package `tirai setup` installed, else a dbx-web already on PATH."""
     if os.environ.get("DBX_WEB_BIN"):
         return os.environ["DBX_WEB_BIN"]
     d = dbx_web_dir()
     for p in (d / "dbx-web.exe", d / "bin" / "dbx-web-bin"):
         if p.is_file():
             return str(p)
+    return find_bin("dbx-web") or find_bin("dbx-web-bin")
+
+
+def dbx_package_root(binary):
+    """Package directory of a dbx-web binary (holds the web assets)."""
+    p = Path(binary).resolve().parent
+    return p.parent if p.name == "bin" else p
+
+
+def dbx_url():
+    return os.environ.get("DBX_URL") or f"http://127.0.0.1:{os.environ.get('DBX_PORT') or 4224}/"
+
+
+def dbx_running(url=None, timeout=2):
+    """True when a DBX web server answers at `url` (its auth-check endpoint returns JSON)."""
+    import json
+    import urllib.request
+
+    check = (url or dbx_url()).rstrip("/") + "/api/auth/check"
+    try:
+        with urllib.request.urlopen(check, timeout=timeout) as r:  # noqa: S310 - local/user-configured URL
+            return "authenticated" in json.loads(r.read().decode("utf-8") or "{}")
+    except (OSError, ValueError):
+        return False
+
+
+def dbx_docker():
+    """(docker, containers, has_image) for the DBX image; containers is [(name, running)]. None without Docker."""
+    docker = find_bin("docker")
+    if not docker:
+        return None
+    try:
+        ps = run_text([docker, "ps", "-a", "--format", "{{.Names}}\t{{.Image}}\t{{.State}}"], timeout=15)
+        img = run_text([docker, "images", "-q", DBX_IMAGE], timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if ps.returncode != 0:  # daemon down or no permission
+        return None
+    containers = []
+    for line in ps.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[1].split(":")[0] == DBX_IMAGE:
+            containers.append((parts[0], parts[2] == "running"))
+    return docker, containers, bool(img.stdout.strip())
+
+
+def find_dbx():
+    """How DBX web is already available here, or None: ('running', url) | ('binary', path) | ('docker', what)."""
+    if dbx_running():
+        return "running", dbx_url()
+    binary = dbx_web_bin()
+    if binary:
+        return "binary", binary
+    d = dbx_docker()
+    if d and d[1]:
+        name, running = d[1][0]
+        return "docker", f"container {name} ({'running' if running else 'stopped'})"
+    if d and d[2]:
+        return "docker", f"image {DBX_IMAGE}"
     return None
 
 
@@ -74,7 +135,24 @@ def _ffmpeg_dirs():
         dirs += [Path("C:/ProgramData/chocolatey/bin"), HOME / "scoop" / "shims"]
     elif IS_MAC:
         dirs += ["/opt/homebrew/bin", "/usr/local/bin"]
+    else:
+        dirs += ["/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin", HOME / ".linuxbrew" / "bin", "/snap/bin"]
     return dirs
+
+
+def _ffmpeg_candidates():
+    """Every ffmpeg on this machine TIRAI knows about: setup's copy, each PATH entry, package-manager dirs."""
+    seen, out = set(), []
+    dirs = [TIRAI_BIN, *os.environ.get("PATH", "").split(os.pathsep), *_ffmpeg_dirs()]
+    for d in dirs:
+        if not d:
+            continue
+        p = Path(d).expanduser() / _exe("ffmpeg")
+        key = str(p.resolve()) if p.is_file() else None
+        if key and key not in seen:
+            seen.add(key)
+            out.append(str(p))
+    return out
 
 
 def _tirai_tool(name):
@@ -83,16 +161,33 @@ def _tirai_tool(name):
 
 
 def ffmpeg_bin():
-    """FFMPEG_BIN, then the build `tirai setup` downloaded, then PATH / package-manager locations."""
+    """FFMPEG_BIN, else the first ffmpeg >= MIN_FFMPEG (setup's copy, PATH, package dirs), else the first found."""
     if os.environ.get("FFMPEG_BIN"):
         return os.environ["FFMPEG_BIN"]
-    return _tirai_tool("ffmpeg") or find_bin("ffmpeg", None, _ffmpeg_dirs())
+    found = _ffmpeg_candidates()
+    good = next((p for p in found if (ffmpeg_version(p) or (0, 0)) >= MIN_FFMPEG), None)
+    return good or (found[0] if found else None)
 
 
 def ffprobe_bin():
+    """FFPROBE_BIN, else the ffprobe next to the chosen ffmpeg, else PATH."""
     if os.environ.get("FFPROBE_BIN"):
         return os.environ["FFPROBE_BIN"]
+    ff = ffmpeg_bin()
+    if ff:
+        p = Path(ff).parent / _exe("ffprobe")
+        if p.is_file():
+            return str(p)
     return _tirai_tool("ffprobe") or find_bin("ffprobe", None, _ffmpeg_dirs())
+
+
+def tool_env():
+    """Environment for child tools (agent-browser records through `ffmpeg` on PATH): chosen ffmpeg's dir first."""
+    env = dict(os.environ)
+    ff = ffmpeg_bin()
+    if ff and os.path.isabs(ff):
+        env["PATH"] = str(Path(ff).parent) + os.pathsep + env.get("PATH", "")
+    return env
 
 
 def parse_ffmpeg_version(text):
@@ -109,9 +204,21 @@ def ffmpeg_version(path=None):
     path = path or ffmpeg_bin()
     if not path:
         return None
+    return _ffmpeg_version(str(path), _mtime(path))
+
+
+def _mtime(path):
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return 0
+
+
+@functools.lru_cache(maxsize=32)
+def _ffmpeg_version(path, _mtime):
     try:
         return parse_ffmpeg_version(run_text([path, "-version"], timeout=30).stdout)
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
         return None
 
 
