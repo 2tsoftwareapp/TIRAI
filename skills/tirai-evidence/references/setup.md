@@ -8,15 +8,18 @@
 If `tirai` is already on PATH, run `tirai setup --yes` (add `--agent <name>` to choose agents).
 It installs, with the OS package manager or official installer:
 
-1. ffmpeg (+ DejaVu font on Linux) — brew / apt, dnf, pacman, zypper, apk / winget, choco, scoop.
-2. BrowserSkill CLI (`bsk`) — Tencent's official `install.sh` / `install.ps1` into `~/.local/bin`.
-3. The `tirai-evidence` skill for detected agents, plus BrowserSkill's own skill for Claude Code, Codex, Cursor.
+1. ffmpeg >= 6.0 (+ DejaVu font on Linux) — kept if new enough; otherwise a static build into `~/.tirai/bin`
+   (Linux, Windows) or `brew install ffmpeg` (macOS).
+2. agent-browser (default driver) — release binary into `~/.tirai/bin`, then `agent-browser install` (Chrome for Testing).
+3. DBX web — `browser-static` release package into `~/.tirai/dbx` (Linux, Windows x64), else the Docker image.
+4. BrowserSkill CLI (`bsk`) — Tencent's official `install.sh` / `install.ps1` into `~/.local/bin`.
+5. The `tirai-evidence` skill for detected agents, plus BrowserSkill's own skill for Claude Code, Codex, Cursor.
 
 Manual steps the user must do (ask them; never automate):
 
-- Install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons and enable the connection.
-- For database tabs, run DBX web (`docker run -d -p 127.0.0.1:4224:4224 -e DBX_PASSWORD=... -e DBX_DISABLE_PASSWORD_VIEWER=true t8y2/dbx`)
+- Only for `driver: bsk` / `tirai capture`: install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons.
+- For database tabs, start DBX web: `DBX_PASSWORD=... tirai dbx -d` (installed binary, or Docker)
   and create a connection with a **read-only** database user.
 
 Finish with `tirai doctor` → `ready`. If Linux package installs need `sudo` and it asks for a password,
-ask the user to run the printed command. Tool paths can be overridden with `FFMPEG_BIN`, `FFPROBE_BIN`, `BSK_BIN`, `TIRAI_FONT`.
+ask the user to run the printed command. Tool paths can be overridden with `FFMPEG_BIN`, `FFPROBE_BIN`, `AGENT_BROWSER_BIN`, `DBX_WEB_BIN`, `BSK_BIN`, `TIRAI_FONT`.

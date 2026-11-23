@@ -1,6 +1,6 @@
 ---
 name: tirai-evidence
-description: Record test evidence videos from a written test scenario. Drives a real browser with Tencent BrowserSkill (bsk), checks the database through DBX web in a second tab, draws Snagit-style boxes/arrows/labels on the page, and composes one MP4 with subtitles and a step report using ffmpeg. Use when the user wants an evidence video, a recorded test run, "quay evidence", or step-by-step proof of a UI + DB behaviour.
+description: Record test evidence videos from a written test scenario. Drives Chrome with vercel-labs agent-browser (default) or Tencent BrowserSkill (bsk), checks the database through DBX web in a second tab, draws Snagit-style boxes/arrows/labels on the page, and composes one MP4 with subtitles and a step report using ffmpeg. Use when the user wants an evidence video, a recorded test run, "quay evidence", or step-by-step proof of a UI + DB behaviour.
 ---
 
 # TIRAI evidence recording
@@ -11,11 +11,12 @@ Workflow: **scenario → dry-run → record → compose**. Never record before t
 
 ```bash
 tirai doctor            # if tirai is missing or a check fails: see references/setup.md
-tirai setup --yes       # installs ffmpeg, BrowserSkill CLI and skills for this OS
+tirai setup --yes       # installs ffmpeg >= 6, agent-browser, DBX web, BrowserSkill CLI, skills
+tirai dbx -d            # start DBX web (http://127.0.0.1:4224) when the scenario has a db tab
 ```
 
 All required checks must be `ok`. Works on macOS, Linux and Windows; follow
-[references/setup.md](references/setup.md). The user installs the browser extension themselves;
+[references/setup.md](references/setup.md). The default driver needs no extension; only `driver: bsk` / `tirai capture` need the user to install the BrowserSkill extension;
 never use `sudo` without asking.
 
 ## 1. Write the scenario with the user
@@ -39,7 +40,7 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
 
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
-- Find selectors with `bsk open <url>` / `bsk snapshot` before writing them; do not guess. Or let the user click
+- Find selectors with `agent-browser open <url>` + `agent-browser snapshot` (or `bsk snapshot`) before writing them; do not guess. Or let the user click
   the flow once: `tirai capture <url> -o <file>` writes the scenario from a `bsk record` trace.
 - Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `save:` to reuse on-screen values as `{{name}}`.
 - Video: `zoom: <selector>` on a step, `layout: split` to show UI and DB side by side; `subtitle: {en, vi}` + `--lang`.
@@ -77,4 +78,4 @@ Give the user `final.mp4`, `report.html` (or `report.xlsx`) and `manifest.sha256
 ## Ad-hoc annotation (outside a scenario)
 
 `tirai annotate-js` prints the path of `annotate.js`. Inject it with
-`bsk evaluate "$(cat <path>);__ann.arrow('#email',{label:'here'})" --unverified`, clear with `__ann.clear()`.
+`agent-browser eval --stdin < <path>` then `agent-browser eval "__ann.arrow('#email',{label:'here'})"` (bsk: `bsk evaluate "$(cat <path>);..." --unverified`), clear with `__ann.clear()`.

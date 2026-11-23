@@ -9,6 +9,9 @@ from pathlib import Path
 IS_WINDOWS = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
 HOME = Path.home()
+TIRAI_HOME = Path(os.environ.get("TIRAI_HOME") or HOME / ".tirai")
+TIRAI_BIN = TIRAI_HOME / "bin"  # tools `tirai setup` downloads (ffmpeg, agent-browser)
+MIN_FFMPEG = (6, 0)  # agent-browser recording fails with ffmpeg 4.4; 7.0 verified
 
 
 def _exe(name):
@@ -24,6 +27,34 @@ def find_bin(name, env_var=None, extra=()):
         return found
     for d in extra:
         p = Path(d).expanduser() / _exe(name)
+        if p.is_file():
+            return str(p)
+    return None
+
+
+def platform_arch():
+    """('linux' | 'macos' | 'windows', 'x64' | 'arm64')."""
+    import platform
+
+    osname = "windows" if IS_WINDOWS else "macos" if IS_MAC else "linux"
+    machine = platform.machine().lower()
+    return osname, "arm64" if machine in ("arm64", "aarch64") else "x64"
+
+
+def agent_browser_bin():
+    return find_bin("agent-browser", "AGENT_BROWSER_BIN", [TIRAI_BIN, HOME / ".local" / "bin"])
+
+
+def dbx_web_dir():
+    return Path(os.environ.get("DBX_WEB_DIR") or TIRAI_HOME / "dbx")
+
+
+def dbx_web_bin():
+    """dbx-web server binary from the DBX browser-static package installed by `tirai setup`."""
+    if os.environ.get("DBX_WEB_BIN"):
+        return os.environ["DBX_WEB_BIN"]
+    d = dbx_web_dir()
+    for p in (d / "dbx-web.exe", d / "bin" / "dbx-web-bin"):
         if p.is_file():
             return str(p)
     return None
@@ -46,12 +77,42 @@ def _ffmpeg_dirs():
     return dirs
 
 
+def _tirai_tool(name):
+    p = TIRAI_BIN / _exe(name)
+    return str(p) if p.is_file() else None
+
+
 def ffmpeg_bin():
-    return find_bin("ffmpeg", "FFMPEG_BIN", _ffmpeg_dirs())
+    """FFMPEG_BIN, then the build `tirai setup` downloaded, then PATH / package-manager locations."""
+    if os.environ.get("FFMPEG_BIN"):
+        return os.environ["FFMPEG_BIN"]
+    return _tirai_tool("ffmpeg") or find_bin("ffmpeg", None, _ffmpeg_dirs())
 
 
 def ffprobe_bin():
-    return find_bin("ffprobe", "FFPROBE_BIN", _ffmpeg_dirs())
+    if os.environ.get("FFPROBE_BIN"):
+        return os.environ["FFPROBE_BIN"]
+    return _tirai_tool("ffprobe") or find_bin("ffprobe", None, _ffmpeg_dirs())
+
+
+def parse_ffmpeg_version(text):
+    """(major, minor) from `ffmpeg -version`; git/master builds (N-xxxxx) count as new."""
+    import re
+
+    m = re.search(r"ffmpeg version n?(\d+)\.(\d+)", text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return (99, 0) if re.search(r"ffmpeg version (N-|git-)", text) else None
+
+
+def ffmpeg_version(path=None):
+    path = path or ffmpeg_bin()
+    if not path:
+        return None
+    try:
+        return parse_ffmpeg_version(run_text([path, "-version"], timeout=30).stdout)
+    except OSError:
+        return None
 
 
 def run_text(cmd, **kw):

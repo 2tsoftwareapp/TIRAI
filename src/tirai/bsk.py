@@ -7,7 +7,11 @@ import time
 from tirai.system import bsk_bin, run_text
 
 
-class BskError(RuntimeError):
+class DriverError(RuntimeError):
+    """Any browser-driver failure (bsk or agent-browser)."""
+
+
+class BskError(DriverError):
     pass
 
 
@@ -19,6 +23,8 @@ def _bsk():
 
 
 class Bsk:
+    name = "bsk"
+
     def __init__(self, session=None):
         self.session = session
 

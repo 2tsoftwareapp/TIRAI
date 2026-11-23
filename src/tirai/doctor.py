@@ -2,7 +2,18 @@
 
 import importlib.util
 
-from tirai.system import bsk_bin, ffmpeg_bin, ffprobe_bin, find_bin, find_font, run_text
+from tirai.system import (
+    MIN_FFMPEG,
+    agent_browser_bin,
+    bsk_bin,
+    dbx_web_bin,
+    ffmpeg_bin,
+    ffmpeg_version,
+    ffprobe_bin,
+    find_bin,
+    find_font,
+    run_text,
+)
 
 
 def bsk_doctor(bsk):
@@ -21,13 +32,28 @@ def bsk_doctor(bsk):
 def checks():
     """Yield (name, ok, detail, required)."""
     ff, fp = ffmpeg_bin(), ffprobe_bin()
-    yield "ffmpeg", bool(ff), ff or "missing: run `tirai setup` or set FFMPEG_BIN", True
+    ver = ffmpeg_version(ff) if ff else None
+    need = ".".join(map(str, MIN_FFMPEG))
+    if not ff:
+        yield "ffmpeg", False, "missing: run `tirai setup` or set FFMPEG_BIN", True
+    else:
+        ok = bool(ver) and ver >= MIN_FFMPEG
+        got = ".".join(map(str, ver)) if ver else "unknown version"
+        yield "ffmpeg", ok, f"{ff} ({got})" + ("" if ok else f": need >= {need}, run `tirai setup`"), True
     yield "ffprobe", bool(fp), fp or "missing: installed with ffmpeg, or set FFPROBE_BIN", True
-    bsk = bsk_bin()
-    yield "bsk (BrowserSkill CLI)", bool(bsk), bsk or "missing: run `tirai setup` or set BSK_BIN", True
+    ab, bsk = agent_browser_bin(), bsk_bin()
+    yield "agent-browser (driver)", bool(ab), ab or "missing: run `tirai setup` or set AGENT_BROWSER_BIN", not bsk
+    yield "bsk (BrowserSkill CLI)", bool(bsk), bsk or "optional: driver bsk / tirai capture", not ab
     if bsk:
         ok, detail = bsk_doctor(bsk)
-        yield "bsk doctor", ok, detail, True
+        yield "bsk doctor", ok, detail, not ab
+    dbx = dbx_web_bin()
+    yield (
+        "DBX web",
+        bool(dbx or find_bin("docker")),
+        dbx or ("via Docker" if find_bin("docker") else "run `tirai setup`"),
+        False,
+    )
     font = find_font()
     yield "subtitle font", bool(font), font or "missing: set TIRAI_FONT to a Unicode .ttf", True
     for mod, extra in (("psycopg", "postgres"), ("pymysql", "mysql")):

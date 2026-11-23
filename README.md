@@ -55,7 +55,7 @@ Install TIRAI (test evidence recorder) on this machine and make sure it is ready
 Read https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/llms.txt first and follow it:
 1. Install with the official installer for this OS (install.sh on macOS/Linux, install.ps1 on Windows),
    passing --yes and --agent for the agent you are running in.
-2. Ask me to install the BrowserSkill browser extension (Chrome Web Store / Edge Add-ons) and wait until I confirm.
+2. Start DBX web with `tirai dbx -d` if I want database checks.
 3. Run `tirai doctor` and fix every failing required check. Ask me before using sudo.
 4. Show me the doctor output and tell me how to record my first scenario.
 ```
@@ -74,7 +74,7 @@ Write the scenario, dry-run until every step passes, then record and give me fin
 
 ## Quick start
 
-**1. Install** — no Python needed: the installer uses the prebuilt binary for your OS, or builds from source (with a private Python in `~/.tirai` if yours is missing or older than 3.10). Then `tirai setup` installs ffmpeg, the BrowserSkill CLI and the agent skills.
+**1. Install** — no Python needed: the installer uses the prebuilt binary for your OS, or builds from source (with a private Python in `~/.tirai` if yours is missing or older than 3.10). Then `tirai setup` installs ffmpeg (a current static build if yours is missing or older than 6.0), the agent-browser driver with Chrome for Testing, DBX web, the BrowserSkill CLI and the agent skills.
 
 ```bash
 # macOS / Linux
@@ -86,11 +86,14 @@ curl -fsSL https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.sh
 irm https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.ps1 | iex
 ```
 
-**2. Connect the browser** — install the [BrowserSkill](https://github.com/Tencent/BrowserSkill) extension from the Chrome Web Store or Edge Add-ons, then:
+**2. Check** — no browser extension needed with the default driver:
 
 ```bash
 tirai doctor     # every required check should be "ok"
+tirai dbx -d     # start DBX web on http://127.0.0.1:4224 (binary from setup, or Docker on macOS)
 ```
+
+To drive your own logged-in browser instead, install the [BrowserSkill](https://github.com/Tencent/BrowserSkill) extension and set `driver: bsk` (or `--driver bsk`).
 
 **3. Record** — ask your agent, or run it yourself:
 
@@ -131,12 +134,12 @@ flowchart LR
     R --> C["Compose<br/>ffmpeg"]
     C --> O["final.mp4<br/>subtitles.srt<br/>report.md"]
 
-    subgraph Browser["Real Chrome / Edge via BrowserSkill"]
+    subgraph Browser["Chrome via agent-browser (default) or BrowserSkill"]
         A["App tab"]
         B["DBX tab"]
     end
     D -->|"fill, click, expect"| Browser
-    R -->|"bsk video, annotate.js"| Browser
+    R -->|"record per tab, annotate.js"| Browser
     R -->|"read-only SQL"| DB[("Database")]
 ```
 
@@ -144,7 +147,7 @@ TIRAI is the orchestration layer. It does not reinvent browser automation or a d
 
 | Layer | Provided by |
 |---|---|
-| Browser control, screenshots, tab recording | [Tencent BrowserSkill](https://github.com/Tencent/BrowserSkill) (`bsk`) |
+| Browser control, screenshots, tab recording | [agent-browser](https://github.com/vercel-labs/agent-browser) (default, headless or `--headed`) or [Tencent BrowserSkill](https://github.com/Tencent/BrowserSkill) (`bsk`, your real browser) |
 | Database UI in the browser (100+ engines) | [DBX web](https://github.com/t8y2/dbx) |
 | Scenario runner, DOM and DB assertions, annotation overlay, timeline, video composition, report | **TIRAI** (Python, ffmpeg, `annotate.js`) |
 
@@ -215,7 +218,8 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 
 | Command | Purpose |
 |---|---|
-| `tirai setup` | Install ffmpeg, BrowserSkill CLI and agent skills for this OS |
+| `tirai setup` | Install ffmpeg (version-checked), agent-browser, DBX web, BrowserSkill CLI and agent skills |
+| `tirai dbx [-d] [--port]` | Start DBX web (installed binary, or Docker) |
 | `tirai doctor` | Check tools, fonts, drivers and the browser connection |
 | `tirai init <file>` | Write a scenario template |
 | `tirai validate <file>` | Check structure and required environment variables |
@@ -233,7 +237,7 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 - **Database access is read-only**: use a read-only user for both DBX and `expect: db`.
 - **Blur is instant**: masks render before the next frame, so sensitive values never appear in the recording.
 - **Automatic PII masking** (`privacy:`): emails, phones, cards, tokens and custom patterns are covered on every page.
-- **Browser profile**: BrowserSkill drives a real browser; use a dedicated profile or Agent Window.
+- **Browser profile**: agent-browser uses its own Chrome for Testing profile; BrowserSkill drives your real browser, so use a dedicated profile or Agent Window.
 
 Report vulnerabilities via [SECURITY.md](SECURITY.md).
 

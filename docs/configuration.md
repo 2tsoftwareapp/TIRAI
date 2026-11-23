@@ -6,8 +6,15 @@ Nothing is tied to one OS or install location. Every external tool, font and tim
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `TIRAI_HOME` | `~/.tirai` | where setup puts ffmpeg, agent-browser (`bin/`) and DBX web (`dbx/`) |
+| `TIRAI_DRIVER` | `agent-browser` if installed, else `bsk` | browser driver (scenario `driver:` and `--driver` win) |
+| `TIRAI_HEADED` | off | show the agent-browser window (same as `--headed`) |
+| `TIRAI_CURSOR` | `1` | draw agent-browser's animated cursor in recordings |
+| `AGENT_BROWSER_BIN` | `~/.tirai/bin`, PATH, `~/.local/bin` | agent-browser CLI |
+| `DBX_WEB_BIN`, `DBX_WEB_DIR` | `~/.tirai/dbx` | DBX web server binary / package folder |
+| `DBX_PORT`, `DBX_DATA_DIR`, `DBX_PASSWORD` | `4224`, `~/.tirai/dbx-data`, none | passed to DBX web by `tirai dbx` |
 | `BSK_BIN` | `bsk` on PATH, then `$BSK_INSTALL_DIR`, `~/.local/bin` | BrowserSkill CLI |
-| `FFMPEG_BIN`, `FFPROBE_BIN` | PATH, then Homebrew / winget / choco / scoop locations | ffmpeg tools |
+| `FFMPEG_BIN`, `FFPROBE_BIN` | `~/.tirai/bin`, PATH, then Homebrew / winget / choco / scoop locations | ffmpeg tools (≥ 6.0) |
 | `TIRAI_FONT`, `TIRAI_FONT_BOLD` | DejaVu Sans (Linux, also via `fc-match`), Arial Unicode/Arial (macOS), Arial/Segoe UI (Windows) | title, header and subtitle font files |
 | `TIRAI_SUBTITLE_FONT` | family of the font above | font family name for burned subtitles |
 | `TIRAI_VIDEO_SIZE` | size of the largest recorded segment | output content size, e.g. `1920x1080` |
