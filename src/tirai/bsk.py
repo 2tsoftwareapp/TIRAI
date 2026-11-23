@@ -33,9 +33,12 @@ class Bsk:
                 break
             err = p.stderr.strip() or p.stdout.strip()
             stale = re.search(r"session (\w+) unknown", err)
-            if not stale or attempt == len(scopes) - 1:
+            # A previous run that stopped mid-step can leave the scope bound to a changed task tab.
+            busy = "cooperation_sync_required" in err
+            if not (stale or busy) or attempt == len(scopes) - 1:
                 raise BskError(f"bsk open failed: {err}")
-            run_text([_bsk(), "close", "--session", stale.group(1), "--json"], timeout=60)
+            target = ["--session", stale.group(1)] if stale else ["--scope", sc]
+            run_text([_bsk(), "close", *target, "--json"], timeout=60)
             time.sleep(1 + attempt)
         data = json.loads(p.stdout)
         self.session = data["session_id"]
@@ -85,6 +88,28 @@ class Bsk:
         self.sync(tab)
         extra = ["--selector", selector] if selector else []
         return self.run("press", key, *extra, tab=tab)
+
+    def select(self, tab, selector, values):
+        self.sync(tab)
+        vals = values if isinstance(values, list) else [values]
+        return self.run("select", "--selector", selector, *[x for v in vals for x in ("--value", str(v))], tab=tab)
+
+    def hover(self, tab, selector):
+        self.sync(tab)
+        return self.run("hover", "--selector", selector, tab=tab)
+
+    def scroll_to(self, tab, selector):
+        self.sync(tab)
+        return self.run("scroll-to", "--selector", selector, tab=tab)
+
+    def upload(self, tab, selector, files):
+        self.sync(tab)
+        files = files if isinstance(files, list) else [files]
+        return self.run("upload", "--selector", selector, *[x for f in files for x in ("--file", f)], tab=tab)
+
+    def console(self, tab, since=None):
+        extra = ["--since", str(since)] if since is not None else []
+        return self.run("console", "--limit", "200", *extra, tab=tab)
 
     def evaluate(self, tab, expr):
         # Annotation/assert scripts are read-only and throw when their targets are missing,

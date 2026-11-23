@@ -2,7 +2,7 @@
 
 timeline.json (from `tirai run --record`) -> per-step clips cut from the per-tab recordings
 -> header bar (tab, step, PASS/FAIL) -> title card -> concat -> burned subtitles.
-Writes final.mp4, subtitles.srt, report.md and timeline.final.json next to the timeline.
+Writes final.mp4, subtitles.srt, report.md/.html/.xlsx, timeline.final.json and manifest.sha256 next to the timeline.
 """
 
 import json
@@ -11,6 +11,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from tirai import report
 from tirai.system import ffmpeg_bin, ffprobe_bin, find_font, run_text, subtitle_font_name
 
 FPS = 30
@@ -141,7 +142,7 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame):
 
 
 def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0):
-    """Build final.mp4 (+ subtitles.srt, report.md, timeline.final.json); returns the final video path."""
+    """Build final.mp4 (+ subtitles.srt, report.md/html/xlsx, timeline.final.json, manifest.sha256)."""
     if not ffmpeg_bin():
         raise RuntimeError("ffmpeg not found; run `tirai setup` or set FFMPEG_BIN")
     fonts = (find_font(False), find_font(True))
@@ -194,6 +195,9 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0):
 
     (rec_dir / "report.md").write_text(report_md(tl, final.name), encoding="utf-8")
     (rec_dir / "timeline.final.json").write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")
+    report.write_html(rec_dir, tl, final.name)
+    report.write_xlsx(rec_dir, tl, final.name)
+    report.write_manifest(rec_dir)
     return final, t
 
 

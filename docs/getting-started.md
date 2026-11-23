@@ -12,12 +12,30 @@ curl -fsSL https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.sh
 irm https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.ps1 | iex
 ```
 
-The installer creates `~/.tirai/venv`, puts `tirai` in `~/.local/bin`, then runs `tirai setup`
-(ffmpeg, BrowserSkill CLI, agent skills). Install the BrowserSkill browser extension, then:
+The installer works on any machine, with or without Python:
+
+| Method | When | What it does |
+|---|---|---|
+| **Prebuilt binary** (default when available) | a GitHub Release has `tirai-<os>-<arch>` for this machine | downloads it to `~/.tirai/bin`, verifies `.sha256`; no Python needed |
+| **From source** (fallback, or `--source`) | no binary for this machine | Python ≥ 3.10 on the machine → `~/.tirai/venv`; otherwise it downloads [uv](https://docs.astral.sh/uv/) and a private Python 3.12 into `~/.tirai` (system Python is never touched) |
+
+Force a method with `sh install.sh --binary|--source` (PowerShell: `./install.ps1 --binary|--source`) or
+`TIRAI_INSTALL_MODE`. `tirai` is linked into `~/.local/bin`, then `tirai setup` installs ffmpeg, the BrowserSkill
+CLI and the agent skills. Install the BrowserSkill browser extension, then:
 
 ```bash
 tirai doctor
 ```
+
+### Build the binary yourself
+
+```bash
+python scripts/build_binary.py             # dist/tirai-<os>-<arch>[.exe] + .sha256 (PyInstaller, one file)
+TIRAI_BINARY=dist/tirai-linux-x64 sh install.sh --binary
+```
+
+Run it on each OS/arch you ship and attach the files to a GitHub Release; the installers pick them up from
+`releases/latest` (or `TIRAI_VERSION=<tag>`).
 
 ## 2. Run the demo
 

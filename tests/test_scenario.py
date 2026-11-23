@@ -35,12 +35,40 @@ def test_valid_scenario_has_no_problems():
         (lambda s: s["steps"][0]["actions"].append({"sql": "select 1"}), "requires a tab with kind: dbx"),
         (lambda s: s["steps"][0]["expect"].append({"db": {"sql": "s", "rows": [], "database": "x"}}), "not defined"),
         (lambda s: s["steps"][0]["annotate"].append({"arrow": {"label": "x"}}), "needs a target"),
+        (lambda s: s["steps"][0]["actions"].append({"select": {"selector": "#s"}}), "select is missing value"),
+        (lambda s: s["steps"][0]["actions"].append({"upload": "#f"}), "upload needs a mapping"),
+        (lambda s: s["steps"][0]["actions"].append({"dialog": "maybe"}), "dialog must be accept or dismiss"),
+        (lambda s: s["steps"][0]["expect"].append({"count": {"selector": "li"}}), "count is missing equals"),
+        (lambda s: s["steps"][0]["expect"].append({"attribute": {"selector": "a", "equals": 1}}), "missing name"),
+        (lambda s: s["steps"][0]["expect"].append({"text_matches": {"pattern": "("}}), "invalid pattern"),
+        (lambda s: s["steps"][0]["expect"].append({"request": {"status": 200}}), "missing url_contains"),
     ],
 )
 def test_validation_problems(mutate, fragment):
     sc = base()
     mutate(sc)
     assert any(fragment in p for p in validate(sc))
+
+
+def test_extended_vocabulary_is_valid():
+    sc = base()
+    sc["steps"][0]["actions"] += [
+        {"select": {"selector": "#country", "value": "VN"}},
+        {"hover": "#menu"},
+        {"scroll": "#footer"},
+        {"upload": {"selector": "#file", "file": "fixtures/a.pdf"}},
+        {"dialog": "accept"},
+    ]
+    sc["steps"][0]["expect"] += [
+        {"not_visible": "#error"},
+        {"text_matches": {"selector": "#total", "pattern": "^\\d+ items$"}},
+        {"value": {"selector": "#email", "equals": "a@b.c"}},
+        {"attribute": {"selector": "#save", "name": "disabled", "equals": ""}},
+        {"count": {"selector": "tr.row", "equals": 3}},
+        {"request": {"url_contains": "/api/save", "status": 200}},
+        {"no_console_errors": None},
+    ]
+    assert validate(sc) == []
 
 
 def test_interpolate_and_missing_var(monkeypatch):

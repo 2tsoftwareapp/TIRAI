@@ -74,7 +74,7 @@ Write the scenario, dry-run until every step passes, then record and give me fin
 
 ## Quick start
 
-**1. Install** — the CLI goes into an isolated virtualenv (`~/.tirai`), then `tirai setup` installs ffmpeg, the BrowserSkill CLI and the agent skills.
+**1. Install** — no Python needed: the installer uses the prebuilt binary for your OS, or builds from source (with a private Python in `~/.tirai` if yours is missing or older than 3.10). Then `tirai setup` installs ffmpeg, the BrowserSkill CLI and the agent skills.
 
 ```bash
 # macOS / Linux
@@ -111,7 +111,9 @@ Want to see it end to end first? The [demo](docs/getting-started.md) starts a we
 |---|---|
 | Non-interactive | `curl -fsSL .../install.sh \| sh -s -- --yes --agent claude` |
 | Windows non-interactive | `$env:TIRAI_SETUP_ARGS="--yes --agent claude"; irm .../install.ps1 \| iex` |
-| pipx | `pipx install "tirai[postgres] @ git+https://github.com/2tsoftwareapp/TIRAI"` then `tirai setup` |
+| Prebuilt binary only | `curl -fsSL .../install.sh \| sh -s -- --binary` (PowerShell: `$env:TIRAI_INSTALL_MODE="binary"`) |
+| Build from source | `curl -fsSL .../install.sh \| sh -s -- --source` · local checkout: `TIRAI_SOURCE=. sh install.sh --source` |
+| Your own binary | `python scripts/build_binary.py` then `TIRAI_BINARY=dist/tirai-<os>-<arch> sh install.sh --binary` |
 | Claude Code plugin | `/plugin marketplace add 2tsoftwareapp/TIRAI` then `/plugin install tirai-evidence@tirai` |
 | Preview only | `tirai setup --dry-run` |
 
@@ -189,6 +191,9 @@ evidence/record/
 ├── final.mp4             title card + every step, header bar with PASS/FAIL, burned-in subtitles
 ├── subtitles.srt         one cue per step, aligned to the final video
 ├── report.md             step table: tab, title, status, video time, checks
+├── report.html           self-contained: video player, click a step to jump, embedded screenshots
+├── report.xlsx           evidence sheet: expected / actual / status / screenshot per step
+├── manifest.sha256       SHA-256 of every evidence file; `tirai verify` detects edits
 ├── step-S1.png …         one screenshot per step
 ├── seg-01-app.mp4 …      raw per-tab recordings
 └── timeline.final.json   machine-readable timeline (no secrets)
@@ -215,7 +220,8 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 | `tirai init <file>` | Write a scenario template |
 | `tirai validate <file>` | Check structure and required environment variables |
 | `tirai run <file> --dry-run \| --record` | Execute steps, optionally recording |
-| `tirai record <file>` | Dry-run, record and compose in one go |
+| `tirai record <file>` | Dry-run, record and compose in one go (`--record-failures`: keep going and record bug evidence) |
+| `tirai verify [dir]` | Check an evidence folder against its `manifest.sha256` |
 | `tirai compose <timeline.json>` | Rebuild the video and report from a recorded timeline |
 | `tirai install-skill` | Install the skill for an agent or into any directory |
 
