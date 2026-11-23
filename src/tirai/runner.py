@@ -174,6 +174,18 @@ class Runner:
         self.vars[arg["name"]] = value
         self.saved[arg["name"]] = value
 
+    def zoom_rect(self, tab, zoom):
+        """Viewport rect of the zoom target, consumed by `tirai compose` to ease in on it."""
+        z = {"target": zoom} if isinstance(zoom, str) else dict(zoom)
+        rect = self.b.evaluate(
+            self.tabs[tab],
+            f"(()=>{{const e=document.querySelector({js(z['target'])});if(!e)return null;"
+            "const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height,innerWidth,innerHeight]})()",
+        )
+        if not rect:
+            raise ScenarioError(f"zoom target not found: {z['target']}")
+        return {"rect": rect[:4], "viewport": rect[4:], **{k: z[k] for k in ("factor", "at") if k in z}}
+
     def dbx_sql(self, tab, sql):
         tid = self.tabs[tab]
         cfg = self.dbx(tab)
@@ -340,8 +352,9 @@ class Runner:
                 "checks": [],
             }
             print(f"[{step['id']}] {step['title']} ...", flush=True)
-            if step.get("case"):
-                rec["case"] = step["case"]
+            for key in ("case", "layout", "split_with"):
+                if step.get(key):
+                    rec[key] = step[key]
             try:
                 self.annotate(tab, [])
                 if any("no_console_errors" in e for e in step.get("expect", [])):
@@ -351,6 +364,8 @@ class Runner:
                 for exp in step.get("expect", []):
                     rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
                 rec["status"] = "passed" if all(c["ok"] for c in rec["checks"]) else "failed"
+                if step.get("zoom"):
+                    rec["zoom"] = self.zoom_rect(tab, render(step["zoom"], self.vars, strict=True))
                 if step.get("annotate"):
                     rec["annotations"] = self.annotate(tab, render(step["annotate"], self.vars, strict=True))
             except (BskError, ScenarioError, KeyError, ValueError, RuntimeError) as e:
@@ -389,6 +404,7 @@ def run(scenario, out_dir, record, session=None, scope="tirai", hold=None):
     timeline = {
         "scenario": scenario["name"],
         "mode": "record" if record else "dry-run",
+        **({"lang": scenario["lang"]} if scenario.get("lang") else {}),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "tabs": {k: {"label": v.get("label", k)} for k, v in scenario["tabs"].items()},
         "segments": r.segments,

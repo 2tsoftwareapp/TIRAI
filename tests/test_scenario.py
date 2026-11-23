@@ -42,6 +42,9 @@ def test_valid_scenario_has_no_problems():
         (lambda s: s["steps"][0]["expect"].append({"attribute": {"selector": "a", "equals": 1}}), "missing name"),
         (lambda s: s["steps"][0]["expect"].append({"text_matches": {"pattern": "("}}), "invalid pattern"),
         (lambda s: s["steps"][0]["expect"].append({"request": {"status": 200}}), "missing url_contains"),
+        (lambda s: s["steps"][0].update(zoom={"factor": 2}), "zoom needs a selector"),
+        (lambda s: s["steps"][0].update(layout="grid"), "layout must be split"),
+        (lambda s: s["steps"][0].update(subtitle={}), "subtitle must be text"),
     ],
 )
 def test_validation_problems(mutate, fragment):

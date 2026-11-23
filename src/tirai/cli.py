@@ -78,7 +78,9 @@ def cmd_run(args):
 def cmd_compose(args):
     from tirai import compose
 
-    final, seconds = compose.compose(args.timeline, out=args.output, lead=args.lead, title_seconds=args.title_seconds)
+    final, seconds = compose.compose(
+        args.timeline, out=args.output, lead=args.lead, title_seconds=args.title_seconds, lang=args.lang
+    )
     print(f"final video: {final} ({seconds:.1f}s)")
     return 0
 
@@ -181,6 +183,7 @@ def build_parser():
         s.add_argument("--output", help="final video path (default: <timeline dir>/final.mp4)")
         s.add_argument("--lead", type=float, default=0.3, help="seconds kept before each step starts")
         s.add_argument("--title-seconds", type=float, default=3.0)
+        s.add_argument("--lang", help="subtitle language to burn in (from per-step subtitle maps)")
 
     s = sub.add_parser("run", help="run a scenario (--dry-run or --record)")
     run_opts(s)

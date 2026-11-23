@@ -248,6 +248,9 @@ def validate(sc) -> list[str]:
         where = f"steps[{sid or i}]"
         if not st.get("title"):
             errors.append(f"{where}: title is required")
+        sub = st.get("subtitle")
+        if sub is not None and not isinstance(sub, str | dict) or isinstance(sub, dict) and not sub:
+            errors.append(f"{where}: subtitle must be text or a non-empty map of language -> text")
         if st.get("tab") not in tabs:
             errors.append(f"{where}: tab must be one of {sorted(tabs)}")
         if not st.get("expect"):
@@ -269,6 +272,11 @@ def validate(sc) -> list[str]:
                     errors.append(f"{where}.expect[{j}]: database '{db}' is not defined under databases")
                 if "sql" not in arg or "rows" not in arg:
                     errors.append(f"{where}.expect[{j}]: db needs sql and rows")
+        zoom = st.get("zoom")
+        if zoom is not None and not (isinstance(zoom, str) or (isinstance(zoom, dict) and "target" in zoom)):
+            errors.append(f"{where}: zoom needs a selector or a mapping with target")
+        if st.get("layout") not in (None, "split"):
+            errors.append(f"{where}: layout must be split")
         for j, a in enumerate(st.get("annotate", []) or []):
             kind = _single_key(a, f"{where}.annotate[{j}]", ANNOTATIONS, errors)
             if kind and not (isinstance(a[kind], (str, dict)) and (isinstance(a[kind], str) or "target" in a[kind])):
