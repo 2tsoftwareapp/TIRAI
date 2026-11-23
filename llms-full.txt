@@ -1,0 +1,713 @@
+# TIRAI
+
+> TIRAI is an agent skill and Python CLI (`tirai`) that records test evidence. You write a test scenario
+> (steps, each with actions and expected results); TIRAI runs it in a real Chrome/Edge browser through
+> Tencent BrowserSkill, checks the database in a second browser tab (DBX web) plus a read-only SQL query,
+> draws Snagit-style annotations on the page, records each tab, and uses ffmpeg to compose one MP4 with
+> a header bar, PASS/FAIL badges and burned-in subtitles, plus a Markdown step report.
+
+TIRAI is an orchestration layer, not a browser or database tool:
+
+- Browser control, screenshots and per-tab MP4 recording: Tencent BrowserSkill (`bsk` CLI + browser extension).
+- Database UI in the browser: DBX web (`t8y2/dbx`, port 4224, 100+ engines).
+- TIRAI: scenario format, dry-run and record runner, DOM and read-only DB assertions, injected annotation
+  overlay (`annotate.js`), timeline, subtitle generation, video composition, report.
+
+Workflow (always in this order): `tirai validate` → `tirai run --dry-run` (no video, every step must pass)
+→ `tirai record` (dry-run again, record one segment per tab, compose) → hand over `evidence/record/final.mp4`
+and `report.md`.
+
+Key facts for agents:
+
+- Install: macOS/Linux `curl -fsSL https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.sh | sh -s -- --yes`;
+  Windows `$env:TIRAI_SETUP_ARGS="--yes"; irm https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.ps1 | iex`.
+  Requires Python 3.10+. The installer creates `~/.tirai/venv`, links `tirai` into `~/.local/bin` and runs
+  `tirai setup` (ffmpeg via the OS package manager, BrowserSkill CLI via its official installer, agent skills).
+- The BrowserSkill browser extension must be installed by the human from the Chrome Web Store / Edge Add-ons.
+  Never automate it. Never run `sudo` without asking; if a package install needs a password, ask the user.
+- Verify with `tirai doctor`: every required check must be `ok` before running scenarios.
+- Secrets only as `${ENV_VAR}` in scenarios; values live in the environment or a git-ignored `.env` next to
+  the scenario (loaded automatically, or `--env-file`). Secrets are never written to timelines or reports.
+- Database checks use a read-only user. DBX renders result cells on a canvas, so `expect: db` runs its own
+  read-only query (PostgreSQL, MySQL, SQLite) and annotations target DBX cells with `{ grid: {...} }`.
+- Find selectors with `bsk open <url>` / `bsk snapshot`; do not guess. A missing selector, annotation target
+  or env var fails the step (fail closed).
+- Supported agents: Claude Code, Codex, Cursor, Antigravity, Devin (`tirai install-skill --agent <name>`).
+
+## Docs
+
+- [Getting started](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/getting-started.md): install, demo stack (web app + PostgreSQL + DBX), first recording
+- [Scenario format](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/scenario-format.md): tabs, databases, step fields, actions, expectations, recording model
+- [Annotations](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/annotations.md): box, circle, arrow, text, badge, highlight, blur; targets; animation modes
+- [Configuration](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/configuration.md): environment variables, `.env`, scenario settings, DBX selector overrides
+- [Agents](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/agents.md): skill install locations per agent
+- [Troubleshooting](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/troubleshooting.md): common errors and fixes
+
+## Agent skill
+
+- [SKILL.md](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/skills/tirai-evidence/SKILL.md): the step-by-step workflow an agent follows
+- [Setup reference](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/skills/tirai-evidence/references/setup.md): what `tirai setup` installs and the manual steps
+
+## Examples
+
+- [Demo scenario](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/examples/demo/login-lock.yaml): 6 steps across a web app tab and a DBX tab
+- [Demo stack](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/examples/demo/docker-compose.yml): web app, PostgreSQL with seed data, DBX web
+
+## Optional
+
+- [Full context in one file](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/llms-full.txt): this file plus every doc above inlined
+- [Architecture](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/architecture.md): components and design rules
+- [Changelog](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/CHANGELOG.md): release history
+- [Security policy](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/SECURITY.md): reporting vulnerabilities, data handling
+
+---
+
+## Source: `tirai --help`
+
+```text
+usage: tirai [-h] [--version]
+             {doctor,setup,init,validate,run,compose,record,install-skill,annotate-js} ...
+
+Scenario-driven test evidence recorder
+
+positional arguments:
+  {doctor,setup,init,validate,run,compose,record,install-skill,annotate-js}
+    doctor              check ffmpeg, BrowserSkill, fonts and optional drivers
+    setup               install ffmpeg, BrowserSkill CLI and agent skills for this OS
+    init                write a scenario template
+    validate            validate a scenario file
+    run                 run a scenario (--dry-run or --record)
+    compose             build final.mp4 + subtitles + report from a recorded timeline
+    record              dry-run, record, then compose in one go
+    install-skill       install the tirai-evidence skill for an agent
+    annotate-js         print the path of the injectable annotate.js
+
+options:
+  -h, --help            show this help message and exit
+  --version             show program's version number and exit
+
+usage: tirai doctor [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+usage: tirai setup [-h] [--agent {claude,codex,antigravity,cursor,devin,all}] [--project PROJECT]
+                   [--skip SKIP [SKIP ...]] [--yes] [--dry-run]
+
+options:
+  -h, --help            show this help message and exit
+  --agent {claude,codex,antigravity,cursor,devin,all}
+                        agents to install the skill for (default: detected ones)
+  --project PROJECT     install skills into this project instead of the user profile
+  --skip SKIP [SKIP ...]
+                        ffmpeg, browserskill, skills (comma or space separated)
+  --yes, -y             install without prompting
+  --dry-run             print what would be installed
+
+usage: tirai init [-h] [--force] [path]
+
+positional arguments:
+  path
+
+options:
+  -h, --help  show this help message and exit
+  --force
+
+usage: tirai validate [-h] [--env-file ENV_FILE] scenario
+
+positional arguments:
+  scenario
+
+options:
+  -h, --help           show this help message and exit
+  --env-file ENV_FILE  KEY=VALUE file (default: .env next to the scenario)
+
+usage: tirai run [-h] [--env-file ENV_FILE] [--out OUT] [--session SESSION] [--scope SCOPE]
+                 [--hold HOLD] (--dry-run | --record)
+                 scenario
+
+positional arguments:
+  scenario
+
+options:
+  -h, --help           show this help message and exit
+  --env-file ENV_FILE  KEY=VALUE file (default: .env next to the scenario)
+  --out OUT            output root (default: evidence/)
+  --session SESSION    reuse a live bsk session instead of opening a fresh one
+  --scope SCOPE        bsk scope for the fresh session
+  --hold HOLD          seconds each step stays on screen
+  --dry-run
+  --record
+
+usage: tirai compose [-h] [--output OUTPUT] [--lead LEAD] [--title-seconds TITLE_SECONDS] timeline
+
+positional arguments:
+  timeline
+
+options:
+  -h, --help            show this help message and exit
+  --output OUTPUT       final video path (default: <timeline dir>/final.mp4)
+  --lead LEAD           seconds kept before each step starts
+  --title-seconds TITLE_SECONDS
+
+usage: tirai record [-h] [--env-file ENV_FILE] [--out OUT] [--session SESSION] [--scope SCOPE]
+                    [--hold HOLD] [--output OUTPUT] [--lead LEAD] [--title-seconds TITLE_SECONDS]
+                    [--skip-dry-run]
+                    scenario
+
+positional arguments:
+  scenario
+
+options:
+  -h, --help            show this help message and exit
+  --env-file ENV_FILE   KEY=VALUE file (default: .env next to the scenario)
+  --out OUT             output root (default: evidence/)
+  --session SESSION     reuse a live bsk session instead of opening a fresh one
+  --scope SCOPE         bsk scope for the fresh session
+  --hold HOLD           seconds each step stays on screen
+  --output OUTPUT       final video path (default: <timeline dir>/final.mp4)
+  --lead LEAD           seconds kept before each step starts
+  --title-seconds TITLE_SECONDS
+  --skip-dry-run
+
+usage: tirai install-skill [-h] --agent {claude,codex,antigravity,cursor,devin,all}
+                           [--project PROJECT] [--dest DEST] [--force]
+
+options:
+  -h, --help            show this help message and exit
+  --agent {claude,codex,antigravity,cursor,devin,all}
+  --project PROJECT     install into this project instead of the user profile
+  --dest DEST           explicit skills directory (overrides --agent paths)
+  --force
+
+usage: tirai annotate-js [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+---
+
+## Source: docs/getting-started.md
+
+# Getting started
+
+## 1. Install
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.ps1 | iex
+```
+
+The installer creates `~/.tirai/venv`, puts `tirai` in `~/.local/bin`, then runs `tirai setup`
+(ffmpeg, BrowserSkill CLI, agent skills). Install the BrowserSkill browser extension, then:
+
+```bash
+tirai doctor
+```
+
+## 2. Run the demo
+
+```bash
+cd examples/demo
+docker compose up -d                       # app :8080, PostgreSQL :5432, DBX :4224
+cp .env.example .env                       # Windows: copy .env.example .env
+```
+
+In DBX (http://127.0.0.1:4224, password `dbx_demo_pw`) create one PostgreSQL connection:
+host `db`, port `5432`, database `shop`, user `evidence_ro`, password `ro_demo_pw`. DBX keeps it in its data dir.
+
+```bash
+tirai run login-lock.yaml --dry-run        # loads .env next to the scenario; 6 steps, no video
+tirai record login-lock.yaml               # evidence/record/final.mp4 + report.md
+```
+
+## 3. Your own scenario
+
+```bash
+tirai init scenarios/my-feature.yaml
+tirai validate scenarios/my-feature.yaml
+```
+
+Write steps as *action + expect*, see [scenario format](scenario-format.md) and [annotations](annotations.md).
+
+---
+
+## Source: docs/scenario-format.md
+
+# Scenario reference
+
+```yaml
+name: "Login validation + DB verification"   # title card + report heading
+tabs:                                         # first tab opens a fresh bsk session, others open as new tabs
+  app: { url: "${APP_URL}", label: "WEB APP" }
+  db:
+    url: "${DBX_URL}"
+    label: "DATABASE (DBX)"
+    kind: dbx                                 # enables `sql:`
+    setup:                                    # runs before recording starts
+      - dbx_login: "${DBX_PASSWORD}"
+databases:                                    # used by `expect: db`
+  default: { dsn: "${EV_DB_DSN}" }            # postgresql:// | mysql:// | sqlite:///path
+steps: [...]
+```
+
+## Step fields
+
+| Field | Required | Meaning |
+|---|---|---|
+| `id` | yes | Unique step id (`S1`, `S2`, ...) |
+| `tab` | yes | Tab name from `tabs:` |
+| `title` | yes | Header bar text and report row |
+| `subtitle` | no | Burned-in subtitle (defaults to `title`) |
+| `actions` | no | Executed in order |
+| `expect` | yes | All must pass for the step to pass |
+| `annotate` | no | Drawn after expectations are checked |
+| `hold` | no | Seconds the step stays on screen (default 2.5 recorded, 0.3 dry-run) |
+
+## Actions
+
+| Action | Example |
+|---|---|
+| `navigate` | `navigate: ${APP_URL}` |
+| `fill` | `fill: { selector: "#email", value: "a@b.c" }` |
+| `click` | `click: "button[type=submit]"` |
+| `press` | `press: Enter` or `press: { key: "Ctrl+Enter", selector: ".cm-content" }` |
+| `wait` | `wait: 500` (ms) |
+| `wait_for` | `wait_for: "#welcome"` |
+| `sql` | `sql: "SELECT ..."` (DBX tab: opens a query editor once, types, runs with Ctrl+Enter) |
+| `dbx_login` | `dbx_login: "${DBX_PASSWORD}"` (tab `setup:` only; skipped if already logged in) |
+
+## Expectations
+
+| Expect | Example |
+|---|---|
+| `visible` | `visible: "#email"` |
+| `text_contains` | `text_contains: { selector: ".error", text: "locked" }` (no selector = whole page) |
+| `url_contains` | `url_contains: "/dashboard"` |
+| `db` | `db: { sql: "SELECT status FROM users WHERE id=2", columns: [status], rows: [{status: LOCKED}] }` |
+
+DOM checks retry for up to 6 s. `db` runs read-only against `databases.<name>.dsn` (default `default`),
+independently of what the DBX tab shows: DBX draws its result grid on a canvas, so its cells are not DOM text.
+
+## Recording model
+
+BrowserSkill records one tab at a time (max 10 min per recording, no audio). TIRAI starts a new
+segment whenever the active tab changes, stores per-step start/end offsets in `timeline.json`, and
+`tirai compose` cuts each step out of its segment and joins them in scenario order.
+
+---
+
+## Source: docs/annotations.md
+
+# Annotations reference
+
+`annotate.js` renders inside a shadow root (`position:fixed`, `pointer-events:none`, max z-index),
+so it never changes how the page behaves. It is re-injected on every step; each step starts clean.
+
+| Shape | Scenario form | Notes |
+|---|---|---|
+| `box` | `box: { target: "#email", label: "Email" }` | rounded rectangle |
+| `circle` | `circle: { target: ".error" }` | ellipse around target |
+| `arrow` | `arrow: { target: ".error", from: right, label: "Error", length: 110 }` | `from`: left, right, top, bottom, top-left, top-right, bottom-left, bottom-right |
+| `text` | `text: { target: "#total", label: "Sum is wrong" }` | floating label |
+| `badge` | `badge: { target: "#save", n: 1 }` | numbered marker |
+| `highlight` | `highlight: { target: ".row-2" }` | translucent marker fill (yellow) |
+| `blur` | `blur: { target: "#password" }` | masks sensitive content; always instant |
+
+Common options: `color` (`#e5252a`), `width` (3), `padding` (6), `label`, `labelPos`
+(right, left, top, bottom), `anim`, `duration`, `id`.
+
+## Targets
+
+| Form | Example |
+|---|---|
+| CSS selector | `"#email"` (first visible match) |
+| Visible text | `{ text: "Sign in", within: "form", exact: true, nth: 0 }` |
+| Viewport rect | `{ x: 100, y: 200, w: 300, h: 40 }` |
+| Relative to element | `{ selector: "canvas", rel: { x: 0, y: 26, w: 120, h: 26 } }` |
+| Canvas data grid (DBX) | `{ grid: { column: status, toColumn: failed_logins, row: 1 } }` |
+
+Grid targets take x/width from DOM header cells (`.data-grid-header-cell`) and y from the canvas body
+(`canvas.canvas-grid-surface`, 26 px rows); override with `header`, `body`, `rowHeight`.
+
+A missing target throws, so the step fails instead of silently recording a wrong frame.
+
+## Animation
+
+| `anim` | Behaviour |
+|---|---|
+| `draw` (default) | strokes draw on once (~0.4 s), arrow grows tail to tip, highlight wipes left to right, label fades in last |
+| `fade` | fade in ~0.2 s |
+| `none` | appears instantly (strict evidence) |
+
+No looping or pulsing: BrowserSkill records at roughly 12 fps, so repeated motion looks jerky.
+Removing annotations fades them out in 0.16 s. Set a default for a page with `__ann.config({ anim: "none" })`.
+
+---
+
+## Source: docs/configuration.md
+
+# Configuration
+
+Nothing is tied to one OS or install location. Every external tool, font and timing value can be overridden.
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BSK_BIN` | `bsk` on PATH, then `$BSK_INSTALL_DIR`, `~/.local/bin` | BrowserSkill CLI |
+| `FFMPEG_BIN`, `FFPROBE_BIN` | PATH, then Homebrew / winget / choco / scoop locations | ffmpeg tools |
+| `TIRAI_FONT`, `TIRAI_FONT_BOLD` | DejaVu Sans (Linux, also via `fc-match`), Arial Unicode/Arial (macOS), Arial/Segoe UI (Windows) | title, header and subtitle font files |
+| `TIRAI_SUBTITLE_FONT` | family of the font above | font family name for burned subtitles |
+| `TIRAI_VIDEO_SIZE` | size of the largest recorded segment | output content size, e.g. `1920x1080` |
+| `TIRAI_TIMING_SCALE` | `1.0` | multiply all settle delays (use `2` on slow machines) |
+| `TIRAI_EXPECT_TIMEOUT` | `6` | seconds DOM expectations retry |
+
+Installer variables (`install.sh` / `install.ps1`): `TIRAI_REPO`, `TIRAI_REF`, `TIRAI_SOURCE` (local checkout
+or archive URL), `TIRAI_HOME` (`~/.tirai`), `TIRAI_BIN_DIR` (`~/.local/bin`), `TIRAI_EXTRAS` (`postgres`),
+`TIRAI_NO_SETUP=1`, `TIRAI_SETUP_ARGS` (Windows, when piping into `iex`).
+
+## Scenario variables and `.env`
+
+`${VAR}` placeholders are read from the environment. `tirai validate|run|record` also load a `.env`
+file next to the scenario (or `--env-file <path>`); variables already set in the shell win.
+This works the same in bash, zsh, PowerShell and cmd.
+
+## Scenario `settings:`
+
+```yaml
+settings:
+  hold: 2.5            # seconds each recorded step stays on screen
+  timing_scale: 1.0    # same as TIRAI_TIMING_SCALE (env wins)
+  expect_timeout: 6    # same as TIRAI_EXPECT_TIMEOUT (env wins)
+```
+
+## DBX tab overrides
+
+```yaml
+tabs:
+  db:
+    url: ${DBX_URL}
+    kind: dbx
+    dbx:
+      new_query: "New Query"           # button text that opens a SQL editor (change for a localized UI)
+      editor: ".cm-content"            # SQL editor element
+      password: "input[type=password]" # DBX login field
+      run_key: "Ctrl+Enter"            # default: Meta+Enter on macOS, Ctrl+Enter elsewhere
+```
+
+## Skill locations
+
+`tirai install-skill --agent <name>` and `tirai setup` use the paths in [agents.md](agents.md);
+`--project <dir>` installs into a repository, `--dest <dir>` into any directory.
+
+---
+
+## Source: docs/agents.md
+
+# Installing the skill for an agent
+
+The skill is `skills/tirai-evidence/` (SKILL.md + references). Every agent uses the same `tirai` and `bsk` CLIs.
+
+| Agent | Install | Skill location |
+|---|---|---|
+| Claude Code | `/plugin marketplace add 2tsoftwareapp/TIRAI` then `/plugin install tirai-evidence@tirai`, or `tirai install-skill --agent claude` | `~/.claude/skills` or `<project>/.claude/skills` |
+| Codex | `tirai install-skill --agent codex` | `~/.agents/skills` or `<project>/.agents/skills` |
+| Antigravity | `tirai install-skill --agent antigravity` | `~/.gemini/antigravity/skills` or `<project>/.agent/skills` |
+| Cursor | `tirai install-skill --agent cursor` | `~/.cursor/skills` or `<project>/.cursor/skills` |
+| Devin | `tirai install-skill --agent devin --project .` and commit it | `<repo>/.agents/skills` |
+| Other | `tirai install-skill --agent claude --dest <skills dir>` | any directory the agent scans |
+
+`tirai setup` installs the skill for every agent it detects (`~/.claude`, `~/.codex`, `~/.gemini/antigravity`,
+`~/.cursor`); Devin skills are per repository, so use `--project`.
+
+Add `--project <dir>` to install into a repository instead of the user profile, `--force` to overwrite.
+Also install BrowserSkill's own skill so the agent can explore pages: `bsk install-skill --harness <id>`.
+
+Agents without skill support can read `AGENTS.md` / `skills/tirai-evidence/SKILL.md` directly.
+
+---
+
+## Source: docs/architecture.md
+
+# Architecture
+
+```text
+scenario.yaml ──► tirai validate
+      │
+      ▼
+tirai run --dry-run ──► BrowserSkill (bsk) ──► real Chrome/Edge tabs (app, DBX web)
+      │                    │  fill / click / press / evaluate
+      │                    └─ annotate.js injected per step (boxes, arrows, labels, blur)
+      ▼
+tirai run --record ──► bsk video per contiguous tab block ──► seg-NN-<tab>.mp4 + timeline.json
+      │                                               └──► expect: db (read-only driver)
+      ▼
+tirai compose ──► ffmpeg: cut steps, header bar, title card, concat, burn subtitles
+      └──► final.mp4, subtitles.srt, report.md, timeline.final.json
+```
+
+| Component | Owner | Why |
+|---|---|---|
+| Browser control, screenshots, MP4 | [Tencent BrowserSkill](https://github.com/Tencent/BrowserSkill) | real logged-in browser, works with every agent |
+| Database UI in the browser | [DBX web](https://github.com/t8y2/dbx) | many database engines, password-protected web UI |
+| Scenario, checks, annotations, timeline, composition | TIRAI | the evidence-specific parts |
+
+Design rules:
+
+- **Dry-run before record**: recording only happens for a scenario that already passes, so videos have no failed attempts.
+- **Per-tab segments**: `bsk video` records a single tab, so the runner starts a new segment on every tab switch and composition restores scenario order.
+- **Checks are independent of pixels**: DOM checks read the page; DB checks query read-only, because DBX renders result cells on a canvas.
+- **Fail closed**: a missing selector, annotation target or env var fails the step.
+
+The previous spec-to-test platform (TypeScript workspaces) is preserved on branch `archive/tirai-v1`.
+
+---
+
+## Source: docs/troubleshooting.md
+
+# Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `bsk doctor` shows no extension | open the browser with the BrowserSkill extension enabled and connected |
+| `bsk open failed ... session <id> unknown` | TIRAI closes the stale session and retries once; if it persists: `bsk session list`, `bsk close --session <id>`, or `--scope <new>` |
+| `requires an unused strict observation` / `control context no longer belongs` | page changed under an action; add `wait_for` before the next action. The runner already syncs before every action |
+| `annotate: target not found` | selector not visible at annotation time; check `step-<id>.png` from the dry-run |
+| DBX cells not found by text | DBX draws results on a canvas: use `{ grid: { column, row } }` targets and `expect: db` |
+| `tirai: command not found` after install | open a new terminal (PATH was updated) or run `~/.local/bin/tirai` / `%USERPROFILE%\\.local\\bin\\tirai.cmd` |
+| ffmpeg installed by winget but not found | open a new terminal, or set `FFMPEG_BIN`; TIRAI also checks `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links` |
+| Linux package install asks for a sudo password | run the printed `sudo ...` command yourself, then `tirai setup` again |
+| DBX query does not run on macOS | the run shortcut defaults to `Meta+Enter`; override with `tabs.<db>.dbx.run_key` |
+| Steps flaky on a slow machine | `TIRAI_TIMING_SCALE=2` |
+| Subtitles missing Vietnamese glyphs | set `TIRAI_FONT` (and `TIRAI_FONT_BOLD`) to a Unicode .ttf |
+| `missing environment variable X` | export it; `tirai validate` lists every variable the scenario needs |
+| Video is choppy | BrowserSkill records ~12 fps; keep `anim: draw`/`fade` short or use `anim: none` |
+
+---
+
+## Source: skills/tirai-evidence/SKILL.md
+
+---
+name: tirai-evidence
+description: Record test evidence videos from a written test scenario. Drives a real browser with Tencent BrowserSkill (bsk), checks the database through DBX web in a second tab, draws Snagit-style boxes/arrows/labels on the page, and composes one MP4 with subtitles and a step report using ffmpeg. Use when the user wants an evidence video, a recorded test run, "quay evidence", or step-by-step proof of a UI + DB behaviour.
+---
+
+# TIRAI evidence recording
+
+Workflow: **scenario → dry-run → record → compose**. Never record before the dry-run passes.
+
+## 0. Check the environment (once per machine)
+
+```bash
+tirai doctor            # if tirai is missing or a check fails: see references/setup.md
+tirai setup --yes       # installs ffmpeg, BrowserSkill CLI and skills for this OS
+```
+
+All required checks must be `ok`. Works on macOS, Linux and Windows; follow
+[references/setup.md](references/setup.md). The user installs the browser extension themselves;
+never use `sudo` without asking.
+
+## 1. Write the scenario with the user
+
+Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thing to prove:
+
+```yaml
+- id: S2
+  tab: app                       # which browser tab (declared under tabs:)
+  title: Invalid email format
+  subtitle: "Step 2: enter a malformed email -> validation error"
+  actions:                       # what to do
+    - fill: { selector: "#email", value: "alice-at-demo.local" }
+    - click: "button[type=submit]"
+  expect:                        # what must be true (required)
+    - text_contains: { selector: ".error", text: "Email format is invalid." }
+  annotate:                      # what to draw once expectations are checked
+    - box: { target: "#email" }
+    - arrow: { target: ".error", from: right, label: "Validation error" }
+```
+
+- Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
+- Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
+- Find selectors with `bsk open <url>` / `bsk snapshot` before writing them; do not guess.
+- Secrets go in `${ENV_VAR}` only. Put values in a git-ignored `.env` next to the scenario
+  (loaded automatically, or pass `--env-file`); never write values into the scenario.
+- DB checks must use a **read-only** database user.
+
+Then `tirai validate <file>` and fix every reported problem.
+
+## 2. Dry-run (no video)
+
+```bash
+tirai run <file> --dry-run
+```
+
+Read the failing step's `expect ... -> actual ...` line and `evidence/dry-run/step-<id>.png`.
+Fix the scenario (selector, wait, data) or report the product bug to the user. Repeat until all steps pass.
+
+## 3. Record + compose
+
+```bash
+tirai record <file>            # dry-run again, record, then compose
+```
+
+Outputs in `evidence/record/`: `final.mp4`, `subtitles.srt`, `report.md`, `timeline.final.json`,
+per-tab `seg-*.mp4` and `step-*.png`. Re-compose without re-recording: `tirai compose evidence/record/timeline.json`.
+
+## 4. Hand over
+
+Give the user `final.mp4` and `report.md`. Check a few frames first
+(`ffmpeg -ss <t> -i final.mp4 -frames:v 1 frame.png`) to confirm annotations and subtitles are visible.
+
+## Ad-hoc annotation (outside a scenario)
+
+`tirai annotate-js` prints the path of `annotate.js`. Inject it with
+`bsk evaluate "$(cat <path>);__ann.arrow('#email',{label:'here'})" --unverified`, clear with `__ann.clear()`.
+
+---
+
+## Source: skills/tirai-evidence/references/setup.md
+
+# Setup
+
+| OS | Install `tirai` + run `tirai setup` |
+|---|---|
+| macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.sh \| sh -s -- --yes` |
+| Windows | `$env:TIRAI_SETUP_ARGS="--yes"; irm https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.ps1 \| iex` |
+
+If `tirai` is already on PATH, run `tirai setup --yes` (add `--agent <name>` to choose agents).
+It installs, with the OS package manager or official installer:
+
+1. ffmpeg (+ DejaVu font on Linux) — brew / apt, dnf, pacman, zypper, apk / winget, choco, scoop.
+2. BrowserSkill CLI (`bsk`) — Tencent's official `install.sh` / `install.ps1` into `~/.local/bin`.
+3. The `tirai-evidence` skill for detected agents, plus BrowserSkill's own skill for Claude Code, Codex, Cursor.
+
+Manual steps the user must do (ask them; never automate):
+
+- Install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons and enable the connection.
+- For database tabs, run DBX web (`docker run -d -p 127.0.0.1:4224:4224 -e DBX_PASSWORD=... -e DBX_DISABLE_PASSWORD_VIEWER=true t8y2/dbx`)
+  and create a connection with a **read-only** database user.
+
+Finish with `tirai doctor` → `ready`. If Linux package installs need `sudo` and it asks for a password,
+ask the user to run the printed command. Tool paths can be overridden with `FFMPEG_BIN`, `FFPROBE_BIN`, `BSK_BIN`, `TIRAI_FONT`.
+
+---
+
+## Source: examples/demo/login-lock.yaml
+
+```yaml
+# Evidence scenario: each step = tab + actions + expect (+ annotations, subtitle).
+# Run `tirai run --dry-run` first to find failing steps, then `tirai record`.
+name: "Login validation + DB verification"
+lang: en
+tabs:
+  app:
+    url: ${APP_URL}
+    label: "WEB APP"
+  db:
+    url: ${DBX_URL}
+    label: "DATABASE (DBX)"
+    kind: dbx          # enables the `sql:` action
+    setup:             # not recorded: login to DBX web once
+      - dbx_login: "${DBX_PASSWORD}"
+
+# Independent read-only check of the same data the DB tab shows (DBX renders results on a canvas).
+databases:
+  default:
+    dsn: "${EV_DB_DSN}"
+
+steps:
+  - id: S1
+    tab: app
+    title: Open the login page
+    subtitle: "Step 1: Open the application login page"
+    actions:
+      - navigate: ${APP_URL}
+    expect:
+      - visible: "#email"
+      - text_contains: { selector: h2, text: "Sign in" }
+    annotate:
+      - box: { target: "form", label: "Login form", color: "#1f6feb" }
+
+  - id: S2
+    tab: app
+    title: Invalid email format
+    subtitle: "Step 2: Enter a malformed email → validation error"
+    actions:
+      - fill: { selector: "#email", value: "alice-at-demo.local" }
+      - fill: { selector: "#password", value: "${APP_PASSWORD}" }
+      - click: "button[type=submit]"
+    expect:
+      - text_contains: { selector: ".error", text: "Email format is invalid." }
+    annotate:
+      - box: { target: "#email" }
+      - arrow: { target: ".error", from: right, label: "Invalid email format" }
+      - blur: { target: "#password" }
+
+  - id: S3
+    tab: app
+    title: Locked account is rejected
+    subtitle: "Step 3: Log in as bob@demo.local (locked) → rejected"
+    actions:
+      - fill: { selector: "#email", value: "bob@demo.local" }
+      - fill: { selector: "#password", value: "${APP_PASSWORD}" }
+      - click: "button[type=submit]"
+    expect:
+      - text_contains: { selector: ".error", text: "This account is locked" }
+    annotate:
+      - circle: { target: ".error" }
+      - arrow: { target: ".error", from: bottom, label: "Account locked" }
+      - blur: { target: "#password" }
+
+  - id: S4
+    tab: db
+    title: Database shows bob as LOCKED
+    subtitle: "Step 4: Query the DB (read-only user): bob has status = LOCKED, failed_logins = 5"
+    actions:
+      - sql: "SELECT id, email, status, failed_logins FROM users WHERE email = 'bob@demo.local';"
+    expect:
+      - db:
+          sql: "SELECT email, status, failed_logins FROM users WHERE email = 'bob@demo.local'"
+          columns: [email, status, failed_logins]
+          rows: [{ email: bob@demo.local, status: LOCKED, failed_logins: 5 }]
+    annotate:
+      - box: { target: ".cm-content", color: "#1f6feb", label: "Read-only query", labelPos: bottom }
+      - highlight: { target: { grid: { column: status, row: 1 } } }
+      - box: { target: { grid: { column: status, toColumn: failed_logins, row: 1 } }, padding: 2 }
+      - arrow: { target: { grid: { column: status, toColumn: failed_logins, row: 1 } }, from: right, label: "status = LOCKED, failed_logins = 5" }
+
+  - id: S5
+    tab: app
+    title: Valid login succeeds
+    subtitle: "Step 5: Log in as alice@demo.local → dashboard"
+    actions:
+      - fill: { selector: "#email", value: "alice@demo.local" }
+      - fill: { selector: "#password", value: "${APP_PASSWORD}" }
+      - click: "button[type=submit]"
+    expect:
+      - url_contains: "/dashboard"
+      - text_contains: { selector: "#welcome", text: "Welcome, Alice Nguyen" }
+    annotate:
+      - box: { target: "#welcome", color: "#16a34a", label: "Logged in", labelPos: bottom }
+
+  - id: S6
+    tab: db
+    title: Database shows alice as ACTIVE
+    subtitle: "Step 6: Query the DB: alice has status = ACTIVE"
+    actions:
+      - sql: "SELECT id, email, status, failed_logins FROM users WHERE email = 'alice@demo.local';"
+    expect:
+      - db:
+          sql: "SELECT email, status FROM users WHERE email = 'alice@demo.local'"
+          columns: [email, status]
+          rows: [{ email: alice@demo.local, status: ACTIVE }]
+    annotate:
+      - highlight: { target: { grid: { column: status, row: 1 } }, color: "#22c55e" }
+      - arrow: { target: { grid: { column: status, row: 1 } }, from: right, color: "#16a34a", label: "status = ACTIVE" }
+```

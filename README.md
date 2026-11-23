@@ -12,7 +12,7 @@ draws arrows and boxes on screen, and hands you **one subtitled MP4 plus a step 
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-555)](docs/getting-started.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Scenario format](docs/scenario-format.md) · [Agents](docs/agents.md) · [Docs](#documentation)
+[Quick prompt](#quick-prompt) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Scenario format](docs/scenario-format.md) · [Agents](docs/agents.md) · [Docs](#documentation)
 
 <br>
 
@@ -45,6 +45,32 @@ TIRAI turns it into a repeatable artifact:
 <td align="center"><sub><b>Database (DBX)</b>: read-only query, matching cells boxed</sub></td>
 </tr>
 </table>
+
+## Quick prompt
+
+Paste this into Claude Code, Codex, Cursor, Antigravity or Devin and let the agent set everything up:
+
+```text
+Install TIRAI (test evidence recorder) on this machine and make sure it is ready to record.
+Read https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/llms.txt first and follow it:
+1. Install with the official installer for this OS (install.sh on macOS/Linux, install.ps1 on Windows),
+   passing --yes and --agent for the agent you are running in.
+2. Ask me to install the BrowserSkill browser extension (Chrome Web Store / Edge Add-ons) and wait until I confirm.
+3. Run `tirai doctor` and fix every failing required check. Ask me before using sudo.
+4. Show me the doctor output and tell me how to record my first scenario.
+```
+
+Then describe what to prove:
+
+```text
+Use the tirai-evidence skill to record evidence for <feature> on <URL>:
+step 1 <action> → expect <result>; step 2 check <table/condition> in the database → expect <rows>.
+Write the scenario, dry-run until every step passes, then record and give me final.mp4 and report.md.
+```
+
+> [!TIP]
+> [`llms.txt`](llms.txt) is a short index for LLMs; [`llms-full.txt`](llms-full.txt) inlines every doc,
+> the skill, the CLI help and the demo scenario in one file, handy for agents without web access.
 
 ## Quick start
 
@@ -213,6 +239,7 @@ Report vulnerabilities via [SECURITY.md](SECURITY.md).
 | [Agents](docs/agents.md) | Skill locations per agent |
 | [Architecture](docs/architecture.md) | Components and design rules |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and fixes |
+| [llms.txt](llms.txt) · [llms-full.txt](llms-full.txt) | Docs for LLMs: index and full single-file context |
 
 ## Contributing
 
