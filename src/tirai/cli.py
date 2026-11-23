@@ -203,6 +203,24 @@ def cmd_from_trace(args):
     return _report_capture(args.output, env, skipped, scenario)
 
 
+def cmd_from_spec(args):
+    from tirai import spec
+
+    out = args.output or str(Path(args.spec).with_suffix(".yaml"))
+    try:
+        sc, unmatched, unresolved = spec.write(args.spec, out, url=args.url)
+    except (ValueError, OSError) as e:
+        print(f"error: {e}")
+        return 1
+    print(f"wrote {out} ({len(sc['steps'])} steps)")
+    for line in unmatched:
+        print(f"not converted: {line}")
+    if unresolved:
+        print("fill in selectors: " + ", ".join(unresolved) + ("" if args.url else " (or pass --url to resolve them)"))
+    print(f"then: tirai validate {out} && tirai run {out} --dry-run")
+    return 0
+
+
 def _report_capture(output, env, skipped, scenario=None):
     import yaml
 
@@ -477,6 +495,12 @@ def build_parser():
     s.add_argument("trace", help="trace.json or the folder that holds it")
     trace_opts(s)
     s.set_defaults(fn=cmd_from_trace)
+
+    s = sub.add_parser("from-spec", help="draft a scenario from a Gherkin .feature, Markdown table or CSV test cases")
+    s.add_argument("spec")
+    s.add_argument("--output", "-o", help="default: <spec>.yaml")
+    s.add_argument("--url", help="resolve element names to selectors on this live page (agent-browser)")
+    s.set_defaults(fn=cmd_from_spec)
 
     s = sub.add_parser("capture", help="record a flow you click through once and turn it into a scenario")
     s.add_argument("url")
