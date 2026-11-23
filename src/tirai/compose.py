@@ -17,6 +17,7 @@ from tirai.system import ffmpeg_bin, ffprobe_bin, find_font, run_text, subtitle_
 FPS = 30
 TOP, BOTTOM = 40, 64  # header bar (tab/step/status) and subtitle band
 DEFAULT_SIZE = (1280, 720)
+DRIVER_NAMES = {"agent-browser": "agent-browser", "bsk": "BrowserSkill", "agent-desktop": "agent-desktop"}
 TAB_COLORS = ["0x1f6feb", "0x7c3aed", "0x0e7490", "0xb45309"]
 
 
@@ -95,7 +96,12 @@ def title_card(tmp, tl, out, seconds, frame):
     lines = [
         (tl["scenario"], 44, "font-bold.ttf", -60),
         (f"{passed}/{len(tl['steps'])} steps passed  ·  recorded {tl['created']}", 24, "font.ttf", 10),
-        ("Evidence: BrowserSkill recording + TIRAI annotations", 20, "font.ttf", 60),
+        (
+            f"Evidence: {DRIVER_NAMES.get(tl.get('driver'), 'browser')} recording + TIRAI annotations",
+            20,
+            "font.ttf",
+            60,
+        ),
     ]
     draws = []
     for i, (txt, size, font, dy) in enumerate(lines):

@@ -177,3 +177,16 @@ def test_dbx_connect_provisions_before_tab_opens(fake, tmp_path, monkeypatch):
     sc["tabs"]["db"]["dbx"] = {"connect": {"name": "shop", "host": "evpg"}}
     runner.run(sc, tmp_path, record=False, hold=0)
     assert seen == [("http://dbx.test/", "postgresql://ro:x@db:5432/shop", "shop", "evpg")]
+
+
+def test_session_closed_when_a_tab_fails_to_load(monkeypatch, tmp_path):
+    d = FakeDriver()
+    monkeypatch.setattr(
+        d, "evaluate", lambda tab, expr: "chrome-error://chromewebdata/" if expr == "location.href" else None
+    )
+    monkeypatch.setattr(runner, "make_driver", lambda *a, **k: d)
+    import pytest
+
+    with pytest.raises(RuntimeError, match="did not load"):
+        runner.run(scenario(), tmp_path, record=False, hold=0)
+    assert d.calls[-1] == ("close_session",)

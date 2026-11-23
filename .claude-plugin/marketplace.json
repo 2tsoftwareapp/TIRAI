@@ -1,11 +1,13 @@
 {
   "name": "tirai",
-  "owner": { "name": "2T Software" },
+  "owner": {
+    "name": "2T Software"
+  },
   "plugins": [
     {
       "name": "tirai-evidence",
       "source": "./",
-      "description": "Record test evidence videos from a written scenario (BrowserSkill + DBX + annotations + ffmpeg)."
+      "description": "Record test evidence videos from a written scenario (agent-browser/BrowserSkill + DBX + annotations + ffmpeg)."
     }
   ]
 }

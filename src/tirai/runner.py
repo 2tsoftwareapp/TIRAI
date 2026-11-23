@@ -1,4 +1,4 @@
-"""Execute a scenario through BrowserSkill.
+"""Execute a scenario through a browser driver (agent-browser or BrowserSkill).
 
 dry-run: run every step and check expectations (no video) to find failing steps.
 record:  same flow, one MP4 per contiguous tab block, plus timeline.json for `tirai compose`.
@@ -23,6 +23,7 @@ DBX_DEFAULTS = {
     "editor": ".cm-content",
     "password": "input[type=password]",
     "run_key": None,  # default: Meta+Enter on macOS, Ctrl+Enter elsewhere
+    "error": ".cm-statement-execution-badge--error",  # DBX marks a failed statement in the editor
 }
 
 
@@ -90,8 +91,18 @@ class Runner:
                 self.tabs[name] = self.b.tab_create(interpolate(cfg["url"]))
             self.pause(1.5)
             self.b.sync(self.tabs[name])
+            self.check_loaded(name, interpolate(cfg["url"]))
             for action in cfg.get("setup", []):
                 self.do_action(name, action)
+
+    def check_loaded(self, name, url):
+        """Fail fast when a tab shows the browser's own error page (server down, wrong port)."""
+        try:
+            href = self.b.evaluate(self.tabs[name], "location.href") or ""
+        except DriverError:
+            return
+        if href.startswith(("chrome-error:", "about:neterror")):
+            raise RuntimeError(f"tab {name}: {url} did not load (is the server running?)")
 
     # ---------- recording ----------
     def ensure_segment(self, tab):
@@ -231,6 +242,8 @@ class Runner:
         self.pause(0.6)
         self.b.press(tid, cfg["run_key"], cfg["editor"])
         self.pause(2.0)
+        if cfg["error"] and self.b.evaluate(tid, f"!!document.querySelector({js(cfg['error'])})"):
+            raise ScenarioError(f"sql failed in DBX: {sql[:80]}")
 
     # ---------- expectations ----------
     def check(self, tab, exp):
@@ -392,6 +405,17 @@ class Runner:
         self.own_session = not self.b.session
         if self.own_session and hasattr(self.b, "init_scripts") and (init := self.privacy_init_script()):
             self.b.init_scripts.append(init)
+        try:
+            return self.run_steps()
+        finally:
+            # Always release the browser (and its daemon), also after an error or Ctrl+C.
+            if self.own_session:
+                try:
+                    self.b.close_session()
+                except Exception:  # noqa: BLE001 - best effort; the original error matters more
+                    pass
+
+    def run_steps(self):
         self.open_tabs()
         results = []
         for step in self.sc["steps"]:
@@ -449,8 +473,6 @@ class Runner:
             if rec["status"] != "passed" and self.stop_on_fail:
                 break
         self.close_segment()
-        if self.own_session:
-            self.b.close_session()
         return results
 
 

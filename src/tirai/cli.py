@@ -81,9 +81,18 @@ def cmd_run(args):
     out = Path(args.out) / ("record" if args.record else "dry-run")
     if args.headed:
         os.environ["TIRAI_HEADED"] = "1"
-    tl = runner.run(
-        sc, out, record=args.record, session=args.session, scope=args.scope, hold=args.hold, driver=args.driver
-    )
+    from tirai.bsk import DriverError
+
+    try:
+        tl = runner.run(
+            sc, out, record=args.record, session=args.session, scope=args.scope, hold=args.hold, driver=args.driver
+        )
+    except (DriverError, RuntimeError, ScenarioError, OSError) as e:
+        print(f"error: {e}")
+        return 1
+    except KeyboardInterrupt:
+        print("interrupted")
+        return 130
     print(f"timeline: {out / 'timeline.json'}")
     return _summary(tl)
 
