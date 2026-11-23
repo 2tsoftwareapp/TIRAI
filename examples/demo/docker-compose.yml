@@ -1,0 +1,21 @@
+# Demo stack for the example scenario: login app + PostgreSQL + DBX web.
+# Local-only demo credentials; never reuse them outside this stack.
+services:
+  app:
+    image: python:3.12-slim
+    command: python /app/server.py
+    environment: { HOST: 0.0.0.0, PORT: "8080" }
+    volumes: ["./app:/app:ro"]
+    ports: ["127.0.0.1:8080:8080"]
+  db:
+    image: postgres:16
+    environment: { POSTGRES_DB: shop, POSTGRES_USER: demo, POSTGRES_PASSWORD: demo_pw }
+    volumes: ["./seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro"]
+    ports: ["127.0.0.1:5432:5432"]
+  dbx:
+    image: t8y2/dbx:latest
+    environment:
+      DBX_PASSWORD: ${DBX_PASSWORD:-dbx_demo_pw}
+      DBX_DISABLE_PASSWORD_VIEWER: "true"
+    ports: ["127.0.0.1:4224:4224"]
+    depends_on: [db]

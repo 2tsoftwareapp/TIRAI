@@ -1,0 +1,32 @@
+# TIRAI evidence scenario. Each step = tab + actions + expect (+ annotate, subtitle).
+#   tirai validate <file>    check structure and list required env vars
+#   tirai run <file> --dry-run   find failing steps (no video)
+#   tirai record <file>      dry-run -> record -> final.mp4 + subtitles + report
+# Secrets only via ${ENV_VAR}; they are never written to timeline or report.
+name: "My feature evidence"
+tabs:
+  app:
+    url: ${APP_URL}
+    label: "WEB APP"
+  # db:
+  #   url: ${DBX_URL}
+  #   label: "DATABASE (DBX)"
+  #   kind: dbx                 # enables the `sql:` action
+  #   setup:
+  #     - dbx_login: "${DBX_PASSWORD}"
+
+# databases:                     # independent read-only check for `expect: db`
+#   default:
+#     dsn: "${EV_DB_DSN}"        # postgresql:// | mysql:// | sqlite:///path
+
+steps:
+  - id: S1
+    tab: app
+    title: Open the login page
+    subtitle: "Step 1: open the login page"
+    actions:
+      - navigate: ${APP_URL}
+    expect:
+      - visible: "#email"
+    annotate:
+      - box: { target: "#email", label: "Email input", color: "#1f6feb" }

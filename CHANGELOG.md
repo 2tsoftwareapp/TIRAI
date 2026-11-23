@@ -4,6 +4,28 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 
 ---
 
+## [2.0.0] - 2026-11-23
+
+### Changed (breaking)
+
+- TIRAI is now a scenario-driven **test evidence recorder** packaged as an agent skill
+  (Claude Code plugin, Codex, Antigravity, Cursor, Devin).
+- The v1 spec-to-test platform (TypeScript workspaces, `tirai` Node CLI, site) was removed from `main`
+  and is preserved on branch `archive/tirai-v1`.
+
+### Added
+
+- `tirai` Python CLI: `doctor`, `init`, `validate`, `run --dry-run|--record`, `record`, `compose`,
+  `install-skill`, `annotate-js`.
+- BrowserSkill-driven runner with per-tab recording segments and `timeline.json`.
+- `annotate.js` overlay: box, circle, arrow, text, badge, highlight, blur; CSS/text/rect/canvas-grid targets;
+  one-shot draw/fade/none animations.
+- ffmpeg composition: per-step clips, header bar, title card, burned subtitles, `report.md`.
+- Read-only `expect: db` checks for PostgreSQL, MySQL and SQLite.
+- Demo stack (`examples/demo`): login app, PostgreSQL, DBX web, reference scenario.
+
+---
+
 ## [1.1.1] - 2026-11-04
 
 ### 🚀 Enhancements & Features
