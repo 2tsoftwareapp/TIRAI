@@ -10,6 +10,9 @@ Nothing is tied to one OS or install location. Every external tool, font and tim
 | `TIRAI_DRIVER` | `agent-browser` if installed, else `bsk` | browser driver (scenario `driver:` and `--driver` win) |
 | `TIRAI_HEADED` | off | show the agent-browser window (same as `--headed`) |
 | `TIRAI_CURSOR` | `1` | draw agent-browser's animated cursor in recordings |
+| `TIRAI_SIGN_KEY` | unset | SSH private key; `compose` re-signs `manifest.sha256` with it after rebuilding |
+| `TIRAI_TTS_CMD` | unset | custom voice command for `--voice`, e.g. `piper --output_file {out}` (`{text}`, `{out}`, `{lang}`) |
+| `AGENT_DESKTOP_BIN` / `AGENT_BROWSER_BIN` | PATH, `~/.tirai/bin` | explicit driver binaries |
 | `TIRAI_AGENT_BROWSER_VERSION` | `0.43.0` | agent-browser release `tirai setup` downloads (pinned digest only for the default) |
 | `TIRAI_DBX_VERSION` | `0.6.72` | DBX web release `tirai setup` downloads |
 | `TIRAI_ALLOW_UNVERIFIED` | unset | `1` accepts a setup download whose SHA-256 is unknown |
@@ -41,6 +44,9 @@ settings:
   hold: 2.5            # seconds each recorded step stays on screen
   timing_scale: 1.0    # same as TIRAI_TIMING_SCALE (env wins)
   expect_timeout: 6    # same as TIRAI_EXPECT_TIMEOUT (env wins)
+  camera: follow       # zoom + pan to each action target (or per step: zoom: follow)
+  camera_factor: 1.6
+  fast_forward: 4      # speed of long waits in the video; 0 = real time
 ```
 
 ## DBX tab overrides

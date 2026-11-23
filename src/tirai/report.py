@@ -6,7 +6,17 @@ import html
 from pathlib import Path
 
 MANIFEST = "manifest.sha256"
-EVIDENCE_GLOBS = ["final.mp4", "subtitles*.srt", "report.*", "timeline*.json", "step-*.png", "seg-*.mp4"]
+EVIDENCE_GLOBS = [
+    "final.mp4",
+    "subtitles*.srt",
+    "report.*",
+    "timeline*.json",
+    "step-*.png",
+    "seg-*.mp4",
+    "junit.xml",
+    "xray.json",
+    "testrail.csv",
+]
 
 
 def _mmss(sec):

@@ -196,7 +196,8 @@ evidence/record/
 ├── report.md             step table: tab, title, status, video time, checks
 ├── report.html           self-contained: video player, click a step to jump, embedded screenshots
 ├── report.xlsx           evidence sheet: expected / actual / status / screenshot per step
-├── manifest.sha256       SHA-256 of every evidence file; `tirai verify` detects edits
+├── manifest.sha256       SHA-256 of every evidence file; `tirai verify` detects edits (+ .sig/.pub/.tsr after `tirai sign`)
+├── junit.xml             one testcase per step (CI test reports); `tirai export` adds xray.json, testrail.csv
 ├── step-S1.png …         one screenshot per step
 ├── seg-01-app.mp4 …      raw per-tab recordings
 └── timeline.final.json   machine-readable timeline (no secrets)
@@ -218,7 +219,7 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 
 | Command | Purpose |
 |---|---|
-| `tirai setup` | Install ffmpeg (version-checked), agent-browser, DBX web, BrowserSkill CLI and agent skills |
+| `tirai setup` | Install ffmpeg (version-checked), agent-browser, DBX web, BrowserSkill CLI and agent skills; opt-in: `--only ocr voice agent-desktop` |
 | `tirai dbx [-d] [--port]` | Start DBX web (installed binary, or Docker) |
 | `tirai doctor` | Check tools, fonts, drivers and the browser connection |
 | `tirai init <file>` | Write a scenario template |
@@ -231,6 +232,12 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 | `tirai dbx-connect` | Create/update the DBX connection from a DSN (`--dsn-env EV_DB_DSN --name shop`) |
 | `tirai mcp` | Run the MCP server (validate, dry_run, record, compose, verify, from_trace) |
 | `tirai install-skill` | Install the skill for an agent or into any directory |
+| `tirai from-spec <file>` | Draft a scenario from Gherkin `.feature`, a Markdown table or CSV (`--url` resolves selectors live) |
+| `tirai export <dir>` | Write `junit.xml`, `xray.json` (Xray import) and `testrail.csv` (TestRail import); nothing is uploaded |
+| `tirai sign <dir> --key <ssh key> [--tsa]` | Sign `manifest.sha256` (`ssh-keygen -Y`), optional RFC 3161 timestamp; `verify --pubkey` checks it |
+| `tirai scan-pii <dir> [--fix]` | OCR the final video for PII (incl. canvas text) and optionally pixelate hits |
+| `tirai index <dirs…> -o index.html` | One filterable HTML page for many evidence runs |
+| `tirai compose … --voice` | Add spoken subtitles (say / SAPI / espeak-ng / custom) |
 
 ## Security
 

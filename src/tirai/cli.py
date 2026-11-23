@@ -81,9 +81,18 @@ def cmd_run(args):
     out = Path(args.out) / ("record" if args.record else "dry-run")
     if args.headed:
         os.environ["TIRAI_HEADED"] = "1"
-    tl = runner.run(
-        sc, out, record=args.record, session=args.session, scope=args.scope, hold=args.hold, driver=args.driver
-    )
+    from tirai.bsk import DriverError
+
+    try:
+        tl = runner.run(
+            sc, out, record=args.record, session=args.session, scope=args.scope, hold=args.hold, driver=args.driver
+        )
+    except (DriverError, RuntimeError, ScenarioError, OSError) as e:
+        print(f"error: {e}")
+        return 1
+    except KeyboardInterrupt:
+        print("interrupted")
+        return 130
     print(f"timeline: {out / 'timeline.json'}")
     return _summary(tl)
 
@@ -92,7 +101,12 @@ def cmd_compose(args):
     from tirai import compose
 
     final, seconds = compose.compose(
-        args.timeline, out=args.output, lead=args.lead, title_seconds=args.title_seconds, lang=args.lang
+        args.timeline,
+        out=args.output,
+        lead=args.lead,
+        title_seconds=args.title_seconds,
+        lang=args.lang,
+        voice=args.voice or os.environ.get("TIRAI_TTS"),
     )
     print(f"final video: {final} ({seconds:.1f}s)")
     return 0
@@ -114,12 +128,106 @@ def cmd_record(args):
     return cmd_compose(args) or failed
 
 
+def cmd_export(args):
+    import json
+
+    from tirai import export, report
+
+    rec = Path(args.dir)
+    tl_path = rec / "timeline.final.json" if (rec / "timeline.final.json").is_file() else rec / "timeline.json"
+    if not tl_path.is_file():
+        print(f"no timeline in {rec}; run `tirai record` first")
+        return 1
+    tl = json.loads(tl_path.read_text(encoding="utf-8"))
+    formats = [f for item in args.format for f in item.split(",") if f] or list(export.FORMATS)
+    unknown = set(formats) - set(export.FORMATS)
+    if unknown:
+        print(f"unknown format(s): {', '.join(sorted(unknown))} (use {', '.join(export.FORMATS)})")
+        return 2
+    for path in export.write(
+        rec, tl, formats, test_key=args.test_key, project_key=args.project_key, case_id=args.case_id
+    ):
+        print(f"wrote {path}")
+    if (rec / report.MANIFEST).is_file():
+        report.write_manifest(rec)
+        if (rec / (report.MANIFEST + ".sig")).is_file():
+            print("manifest changed: run `tirai sign` again")
+    return 0
+
+
+def cmd_sign(args):
+    from tirai import sign
+
+    key = args.key or os.environ.get("TIRAI_SIGN_KEY")
+    if not key:
+        print("pass --key (an SSH private key, e.g. ~/.ssh/id_ed25519) or set TIRAI_SIGN_KEY")
+        return 2
+    try:
+        for path in sign.sign(args.dir, key, tsa=args.tsa or os.environ.get("TIRAI_TSA_URL")):
+            print(f"wrote {path}")
+    except sign.SignError as e:
+        print(f"error: {e}")
+        return 1
+    return 0
+
+
+def cmd_scan_pii(args):
+    import json
+
+    from tirai import ocr, report
+
+    rec = Path(args.dir)
+    video = rec / "final.mp4" if rec.is_dir() else rec
+    rec = video.parent
+    tl_file = rec / "timeline.final.json"
+    priv = json.loads(tl_file.read_text(encoding="utf-8")).get("privacy", {}) if tl_file.is_file() else {}
+    mask = [m for item in args.rules for m in item.split(",") if m] or priv.get("mask")
+    try:
+        hits = ocr.scan(video, mask, args.pattern or priv.get("patterns"), args.keep or priv.get("keep") or (),
+                        every=args.every, lang=args.lang)  # fmt: skip
+        for h in hits:
+            print(f"{h['t']:7.1f}s  {h['text']:<28} box {h['box']}")
+        print(f"{len(hits)} possible PII hit(s) in {video.name}")
+        if hits and args.fix:
+            n = ocr.redact(video, hits, every=args.every)
+            print(f"blurred {n} region(s); rewrote {video.name}")
+            if (rec / report.MANIFEST).is_file():
+                report.write_manifest(rec)
+                if (rec / (report.MANIFEST + ".sig")).is_file():
+                    print("manifest changed: run `tirai sign` again")
+            return 0
+    except RuntimeError as e:
+        print(f"error: {e}")
+        return 2
+    return 1 if hits else 0
+
+
+def cmd_index(args):
+    from tirai import index
+
+    out, runs = index.write(args.dirs, args.out)
+    print(f"wrote {out} ({len(runs)} runs)")
+    return 0 if runs else 1
+
+
 def cmd_verify(args):
-    from tirai import report
+    from tirai import report, sign
 
     problems = report.verify(args.dir)
+    notes = []
+    try:
+        for check in (
+            sign.verify_signature(args.dir, args.pubkey, args.allowed_signers, args.identity),
+            sign.verify_timestamp(args.dir, args.tsa_ca),
+        ):
+            problems += check[0]
+            notes += check[1]
+    except sign.SignError as e:
+        problems.append(str(e))
     for p in problems:
         print(p)
+    for n in notes:
+        print(n)
     print("evidence intact" if not problems else f"{len(problems)} problem(s)")
     return 1 if problems else 0
 
@@ -129,6 +237,24 @@ def cmd_from_trace(args):
 
     scenario, env, skipped = from_trace(args.trace, args.output, do_resolve=not args.no_resolve, scope=args.scope)
     return _report_capture(args.output, env, skipped, scenario)
+
+
+def cmd_from_spec(args):
+    from tirai import spec
+
+    out = args.output or str(Path(args.spec).with_suffix(".yaml"))
+    try:
+        sc, unmatched, unresolved = spec.write(args.spec, out, url=args.url)
+    except (ValueError, OSError) as e:
+        print(f"error: {e}")
+        return 1
+    print(f"wrote {out} ({len(sc['steps'])} steps)")
+    for line in unmatched:
+        print(f"not converted: {line}")
+    if unresolved:
+        print("fill in selectors: " + ", ".join(unresolved) + ("" if args.url else " (or pass --url to resolve them)"))
+    print(f"then: tirai validate {out} && tirai run {out} --dry-run")
+    return 0
 
 
 def _report_capture(output, env, skipped, scenario=None):
@@ -338,6 +464,13 @@ def build_parser():
         s.add_argument("--lead", type=float, default=0.3, help="seconds kept before each step starts")
         s.add_argument("--title-seconds", type=float, default=3.0)
         s.add_argument("--lang", help="subtitle language to burn in (from per-step subtitle maps)")
+        s.add_argument(
+            "--voice",
+            nargs="?",
+            const="auto",
+            choices=["auto", "say", "sapi", "espeak", "cmd"],
+            help="read each subtitle aloud (OS speech engine) and add it as the video's audio track",
+        )
 
     s = sub.add_parser("run", help="run a scenario (--dry-run or --record)")
     run_opts(s)
@@ -367,8 +500,43 @@ def build_parser():
     s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_install_skill)
 
-    s = sub.add_parser("verify", help="check an evidence folder against its manifest.sha256")
+    s = sub.add_parser("export", help="write junit.xml, xray.json, testrail.csv from an evidence folder (no upload)")
     s.add_argument("dir", nargs="?", default="evidence/record")
+    s.add_argument("--format", "-f", action="extend", nargs="+", default=[], help="junit, xray, testrail (default all)")
+    s.add_argument("--test-key", help="Xray: existing Jira test issue key (else a new Manual test is described)")
+    s.add_argument("--project-key", help="Xray: Jira project key for a new test")
+    s.add_argument("--case-id", help="TestRail: case id (e.g. C123) for every row")
+    s.set_defaults(fn=cmd_export)
+
+    s = sub.add_parser("scan-pii", help="OCR the final video for PII the page masking missed (--fix blurs it)")
+    s.add_argument("dir", nargs="?", default="evidence/record", help="evidence folder or a video file")
+    s.add_argument("--rules", action="extend", nargs="+", default=[], help="email, phone, card, token (default all)")
+    s.add_argument("--pattern", action="append", help="extra regex (repeatable)")
+    s.add_argument("--keep", action="append", help="exact text allowed to stay visible (repeatable)")
+    s.add_argument("--every", type=float, default=1.0, help="seconds between sampled frames")
+    s.add_argument("--lang", help="tesseract language(s), e.g. eng+vie")
+    s.add_argument("--fix", action="store_true", help="blur every hit in the video and refresh the manifest")
+    s.set_defaults(fn=cmd_scan_pii)
+
+    s = sub.add_parser("index", help="one HTML page listing every evidence folder found under DIRS")
+    s.add_argument("dirs", nargs="*", default=["evidence"])
+    s.add_argument("--out", "-o", default="evidence-index.html")
+    s.set_defaults(fn=cmd_index)
+
+    s = sub.add_parser("sign", help="sign manifest.sha256 with an SSH key (+ optional RFC 3161 timestamp)")
+    s.add_argument("dir", nargs="?", default="evidence/record")
+    s.add_argument("--key", help="SSH private key (default $TIRAI_SIGN_KEY)")
+    s.add_argument(
+        "--tsa", nargs="?", const=True, help="add an RFC 3161 timestamp (default TSA freetsa.org, or give a URL)"
+    )
+    s.set_defaults(fn=cmd_sign)
+
+    s = sub.add_parser("verify", help="check an evidence folder against its manifest.sha256 (and signature)")
+    s.add_argument("dir", nargs="?", default="evidence/record")
+    s.add_argument("--pubkey", help="trusted SSH public key the manifest must be signed with")
+    s.add_argument("--allowed-signers", help="ssh allowed_signers file (with --identity)")
+    s.add_argument("--identity", default="tirai", help="signer identity in the allowed_signers file")
+    s.add_argument("--tsa-ca", help="TSA CA certificate to verify the timestamp chain")
     s.set_defaults(fn=cmd_verify)
 
     def trace_opts(s):
@@ -380,6 +548,12 @@ def build_parser():
     s.add_argument("trace", help="trace.json or the folder that holds it")
     trace_opts(s)
     s.set_defaults(fn=cmd_from_trace)
+
+    s = sub.add_parser("from-spec", help="draft a scenario from a Gherkin .feature, Markdown table or CSV test cases")
+    s.add_argument("spec")
+    s.add_argument("--output", "-o", help="default: <spec>.yaml")
+    s.add_argument("--url", help="resolve element names to selectors on this live page (agent-browser)")
+    s.set_defaults(fn=cmd_from_spec)
 
     s = sub.add_parser("capture", help="record a flow you click through once and turn it into a scenario")
     s.add_argument("url")

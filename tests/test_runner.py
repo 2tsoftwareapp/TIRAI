@@ -177,3 +177,34 @@ def test_dbx_connect_provisions_before_tab_opens(fake, tmp_path, monkeypatch):
     sc["tabs"]["db"]["dbx"] = {"connect": {"name": "shop", "host": "evpg"}}
     runner.run(sc, tmp_path, record=False, hold=0)
     assert seen == [("http://dbx.test/", "postgresql://ro:x@db:5432/shop", "shop", "evpg")]
+
+
+def test_session_closed_when_a_tab_fails_to_load(monkeypatch, tmp_path):
+    d = FakeDriver()
+    monkeypatch.setattr(
+        d, "evaluate", lambda tab, expr: "chrome-error://chromewebdata/" if expr == "location.href" else None
+    )
+    monkeypatch.setattr(runner, "make_driver", lambda *a, **k: d)
+    import pytest
+
+    with pytest.raises(RuntimeError, match="did not load"):
+        runner.run(scenario(), tmp_path, record=False, hold=0)
+    assert d.calls[-1] == ("close_session",)
+
+
+def test_camera_follow_and_fast_forward_are_recorded(monkeypatch, tmp_path):
+    d = FakeDriver()
+    monkeypatch.setattr(runner, "make_driver", lambda *a, **k: d)
+    monkeypatch.setattr(
+        d,
+        "evaluate",
+        lambda tab, expr: [10, 20, 100, 30, 1280, 720] if "innerWidth,innerHeight" in expr else [True, "ok"],
+        raising=False,
+    )
+    sc = scenario(settings={"camera": "follow"})
+    sc["steps"][0]["actions"] = [{"wait": 1600}, {"click": "#go"}]
+    monkeypatch.setattr(runner.Runner, "pause", lambda self, s: None)
+    tl = runner.run(sc, tmp_path, record=True, hold=0)
+    st = tl["steps"][0]
+    assert st["zoom"]["follow"][0]["rect"] == [10, 20, 100, 30]
+    assert st["idle"][0][2] == 4.0

@@ -39,3 +39,13 @@ def test_cli_init_and_validate(tmp_path, monkeypatch, capsys):
         main(["validate", str(target)])
     assert e.value.code == 0
     assert "APP_URL" in capsys.readouterr().out
+
+
+def test_claude_plugin_version_matches_package():
+    import json
+    from pathlib import Path
+
+    from tirai import __version__
+
+    root = Path(__file__).resolve().parents[1]
+    assert json.loads((root / ".claude-plugin" / "plugin.json").read_text())["version"] == __version__

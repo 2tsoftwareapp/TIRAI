@@ -1,4 +1,4 @@
-"""Execute a scenario through BrowserSkill.
+"""Execute a scenario through a browser driver (agent-browser or BrowserSkill).
 
 dry-run: run every step and check expectations (no video) to find failing steps.
 record:  same flow, one MP4 per contiguous tab block, plus timeline.json for `tirai compose`.
@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from tirai import db as dbq
 from tirai.agentbrowser import make_driver
 from tirai.bsk import DriverError
+from tirai.desktop import MixedDriver, is_desktop
 from tirai.resources import annotate_js
 from tirai.scenario import ScenarioError, interpolate, render
 from tirai.system import primary_modifier
@@ -23,6 +24,7 @@ DBX_DEFAULTS = {
     "editor": ".cm-content",
     "password": "input[type=password]",
     "run_key": None,  # default: Meta+Enter on macOS, Ctrl+Enter elsewhere
+    "error": ".cm-statement-execution-badge--error",  # DBX marks a failed statement in the editor
 }
 
 
@@ -35,6 +37,11 @@ def _origin(url):
     return f"{u.scheme}://{u.netloc}"
 
 
+def _privacy_summary(cfg):
+    """What the OCR pass needs from `privacy:` (rules, patterns, keep, mode); selectors stay out."""
+    return {k: cfg[k] for k in ("mask", "patterns", "keep", "ocr") if cfg.get(k) is not None}
+
+
 class Runner:
     def __init__(
         self, scenario, out, session=None, record=False, hold=0.3, stop_on_fail=False, scope="tirai", driver=None
@@ -42,7 +49,10 @@ class Runner:
         self.sc = scenario
         self.out = out
         self.scope = scope
-        self.b = make_driver(driver or scenario.get("driver"), session)
+        if any("app" in (cfg or {}) for cfg in scenario["tabs"].values()):
+            self.b = MixedDriver(lambda: make_driver(driver or scenario.get("driver"), session))
+        else:
+            self.b = make_driver(driver or scenario.get("driver"), session)
         self.record = record
         self.hold = hold
         self.stop_on_fail = stop_on_fail
@@ -82,16 +92,32 @@ class Runner:
             raise RuntimeError(f"dbx.connect {conn['name']}: {e}") from None
 
     def open_tabs(self):
-        for i, (name, cfg) in enumerate(self.sc["tabs"].items()):
+        for name, cfg in self.sc["tabs"].items():
+            if "app" in cfg:
+                self.tabs[name] = self.b.desk.launch(name, {**cfg, "app": interpolate(cfg["app"])})
+                self.pause(1.0)
+                for action in cfg.get("setup", []):
+                    self.do_action(name, action)
+                continue
             self.provision_dbx(cfg)
-            if i == 0 and not self.b.session:
+            if not self.b.session:
                 self.tabs[name] = self.b.open_session(interpolate(cfg["url"]), self.scope)
             else:
                 self.tabs[name] = self.b.tab_create(interpolate(cfg["url"]))
             self.pause(1.5)
             self.b.sync(self.tabs[name])
+            self.check_loaded(name, interpolate(cfg["url"]))
             for action in cfg.get("setup", []):
                 self.do_action(name, action)
+
+    def check_loaded(self, name, url):
+        """Fail fast when a tab shows the browser's own error page (server down, wrong port)."""
+        try:
+            href = self.b.evaluate(self.tabs[name], "location.href") or ""
+        except DriverError:
+            return
+        if isinstance(href, str) and href.startswith(("chrome-error:", "about:neterror")):
+            raise RuntimeError(f"tab {name}: {url} did not load (is the server running?)")
 
     # ---------- recording ----------
     def ensure_segment(self, tab):
@@ -201,13 +227,55 @@ class Runner:
         self.vars[arg["name"]] = value
         self.saved[arg["name"]] = value
 
+    @property
+    def camera(self):
+        return (self.sc.get("settings") or {}).get("camera")
+
+    @property
+    def camera_factor(self):
+        return float((self.sc.get("settings") or {}).get("camera_factor", 1.6))
+
+    def tracked_action(self, tab, action, rec, follow):
+        """Run an action; when recording, note where it happened (camera follow) and long waits (fast-forward)."""
+        ((kind, arg),) = action.items()
+        t0 = self.now()
+        if t0 is not None and follow:
+            target = arg.get("selector") if isinstance(arg, dict) else arg
+            if kind in ("fill", "click", "select", "hover", "scroll", "upload", "press") and isinstance(target, str):
+                rect = self.target_rect(tab, target)
+                if rect:
+                    rec.setdefault("camera", []).append({"t": t0, "rect": rect[:4], "viewport": rect[4:]})
+        self.do_action(tab, action)
+        speed = float((self.sc.get("settings") or {}).get("fast_forward", 4))
+        if t0 is not None and kind in ("wait", "wait_for") and speed > 1 and (t1 := self.now()) - t0 >= 1.5:
+            rec.setdefault("idle", []).append([round(t0 + 0.3, 3), round(t1 - 0.2, 3), speed])
+
+    def target_rect(self, tab, selector):
+        if is_desktop(self.tabs[tab]):
+            try:
+                return self.b.desk.rect(self.tabs[tab], selector)
+            except DriverError:
+                return None
+        try:
+            return self.b.evaluate(
+                self.tabs[tab],
+                f"(()=>{{const e=document.querySelector({js(selector)});if(!e)return null;"
+                "const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height,innerWidth,innerHeight]})()",
+            )
+        except DriverError:
+            return None
+
     def zoom_rect(self, tab, zoom):
         """Viewport rect of the zoom target, consumed by `tirai compose` to ease in on it."""
         z = {"target": zoom} if isinstance(zoom, str) else dict(zoom)
-        rect = self.b.evaluate(
-            self.tabs[tab],
-            f"(()=>{{const e=document.querySelector({js(z['target'])});if(!e)return null;"
-            "const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height,innerWidth,innerHeight]})()",
+        rect = (
+            self.target_rect(tab, z["target"])
+            if is_desktop(self.tabs[tab])
+            else self.b.evaluate(
+                self.tabs[tab],
+                f"(()=>{{const e=document.querySelector({js(z['target'])});if(!e)return null;"
+                "const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height,innerWidth,innerHeight]})()",
+            )
         )
         if not rect:
             raise ScenarioError(f"zoom target not found: {z['target']}")
@@ -231,6 +299,8 @@ class Runner:
         self.pause(0.6)
         self.b.press(tid, cfg["run_key"], cfg["editor"])
         self.pause(2.0)
+        if cfg["error"] and self.b.evaluate(tid, f"!!document.querySelector({js(cfg['error'])})"):
+            raise ScenarioError(f"sql failed in DBX: {sql[:80]}")
 
     # ---------- expectations ----------
     def check(self, tab, exp):
@@ -240,6 +310,13 @@ class Runner:
             return self.check_db(arg)
         if kind == "no_console_errors":
             return self.check_console(tab, arg)
+        if is_desktop(tid):
+            deadline = time.time() + self.expect_timeout
+            while True:
+                ok, actual = self.b.desk.check(tid, kind, arg)
+                if ok or time.time() > deadline:
+                    return {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok)}
+                self.pause(0.5)
         q = "document.querySelector"
         if kind == "visible":
             expr = (
@@ -368,11 +445,15 @@ class Runner:
     def apply_privacy(self, tab):
         """(Re)install auto PII masking in the tab; it keeps masking as the DOM changes until the next load."""
         cfg = self.privacy_config()
-        if not cfg or self.sc["tabs"][tab].get("privacy") is False:
+        if not cfg or self.sc["tabs"][tab].get("privacy") is False or is_desktop(self.tabs[tab]):
             return
         self.b.evaluate(self.tabs[tab], annotate_js() + f";__ann.mask({js(cfg)})")
 
     def annotate(self, tab, items):
+        if is_desktop(self.tabs[tab]):
+            if items:
+                raise ScenarioError("annotate: is only available on browser tabs")
+            return []
         calls = ["__ann.clear()"]
         for item in items or []:
             ((kind, a),) = item.items()
@@ -392,6 +473,17 @@ class Runner:
         self.own_session = not self.b.session
         if self.own_session and hasattr(self.b, "init_scripts") and (init := self.privacy_init_script()):
             self.b.init_scripts.append(init)
+        try:
+            return self.run_steps()
+        finally:
+            # Always release the browser (and its daemon), also after an error or Ctrl+C.
+            if self.own_session:
+                try:
+                    self.b.close_session()
+                except Exception:  # noqa: BLE001 - best effort; the original error matters more
+                    pass
+
+    def run_steps(self):
         self.open_tabs()
         results = []
         for step in self.sc["steps"]:
@@ -419,13 +511,16 @@ class Runner:
                 if any("no_console_errors" in e for e in step.get("expect", [])):
                     self.console_since[tab] = self.console_cursor(tab)
                 self.apply_privacy(tab)
+                follow = step.get("zoom") == "follow" or (not step.get("zoom") and self.camera == "follow")
                 for action in step.get("actions", []):
-                    self.do_action(tab, render(action, self.vars, strict=True))
+                    self.tracked_action(tab, render(action, self.vars, strict=True), rec, follow)
                     self.apply_privacy(tab)
                 for exp in step.get("expect", []):
                     rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
                 rec["status"] = "passed" if all(c["ok"] for c in rec["checks"]) else "failed"
-                if step.get("zoom"):
+                if follow and rec.get("camera"):
+                    rec["zoom"] = {"follow": rec.pop("camera"), **({"factor": self.camera_factor})}
+                elif step.get("zoom") and step["zoom"] != "follow":
                     rec["zoom"] = self.zoom_rect(tab, render(step["zoom"], self.vars, strict=True))
                 if step.get("annotate"):
                     rec["annotations"] = self.annotate(tab, render(step["annotate"], self.vars, strict=True))
@@ -449,8 +544,6 @@ class Runner:
             if rec["status"] != "passed" and self.stop_on_fail:
                 break
         self.close_segment()
-        if self.own_session:
-            self.b.close_session()
         return results
 
 
@@ -468,6 +561,7 @@ def run(scenario, out_dir, record, session=None, scope="tirai", hold=None, drive
         **({"lang": scenario["lang"]} if scenario.get("lang") else {}),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "driver": r.b.name,
+        **({"privacy": _privacy_summary(r.privacy_config())} if scenario.get("privacy") else {}),
         "tabs": {k: {"label": v.get("label", k)} for k, v in scenario["tabs"].items()},
         "segments": r.segments,
         "steps": steps,

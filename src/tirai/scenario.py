@@ -30,10 +30,11 @@ REQUIRED = {
     "save": ("name", "selector"),
 }
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
-SETTINGS = {"hold", "timing_scale", "expect_timeout"}
+SETTINGS = {"hold", "timing_scale", "expect_timeout", "camera", "camera_factor", "fast_forward"}
 PII_RULES = {"email", "phone", "card", "token"}
-PRIVACY_KEYS = {"mask", "patterns", "selectors", "keep", "inputs"}
-DBX_KEYS = {"new_query", "editor", "password", "run_key", "connect"}
+PRIVACY_KEYS = {"mask", "patterns", "selectors", "keep", "inputs", "ocr"}
+OCR_MODES = {"off", "warn", "fix", "fail"}
+DBX_KEYS = {"new_query", "editor", "password", "run_key", "connect", "error"}
 DBX_CONNECT_KEYS = {"name", "database", "host", "password_env"}
 ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -218,6 +219,8 @@ def _check_privacy(p, errors):
     for rule in p.get("mask") or []:
         if rule not in PII_RULES:
             errors.append(f"privacy.mask: unknown rule {rule!r} (allowed: {', '.join(sorted(PII_RULES))})")
+    if p.get("ocr") is not None and p["ocr"] not in OCR_MODES:
+        errors.append(f"privacy.ocr: must be one of {', '.join(sorted(OCR_MODES))}")
     for pat in p.get("patterns") or []:
         try:
             re.compile(str(pat))
@@ -247,8 +250,8 @@ def validate(sc) -> list[str]:
         errors.append("tabs: at least one tab is required")
         tabs = {}
     for name, cfg in tabs.items():
-        if not isinstance(cfg, dict) or not cfg.get("url"):
-            errors.append(f"tabs.{name}: url is required")
+        if not isinstance(cfg, dict) or not (cfg.get("url") or cfg.get("app")):
+            errors.append(f"tabs.{name}: url (web page) or app (desktop app) is required")
             continue
         for key in cfg.get("dbx") or {}:
             if key not in DBX_KEYS:
