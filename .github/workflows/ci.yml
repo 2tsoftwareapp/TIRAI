@@ -40,3 +40,40 @@ jobs:
         run: node --check src/tirai/assets/annotate.js
       - name: Tests
         run: pytest -q
+
+  install:
+    name: Installer on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install.sh (macOS/Linux)
+        if: runner.os != 'Windows'
+        env:
+          TIRAI_SOURCE: ${{ github.workspace }}
+        run: |
+          sh install.sh --yes --skip ffmpeg,browserskill --agent claude --agent codex --agent antigravity
+          ~/.local/bin/tirai --version
+          ~/.local/bin/tirai setup --dry-run --agent cursor
+          test -f ~/.claude/skills/tirai-evidence/SKILL.md
+          test -f ~/.agents/skills/tirai-evidence/SKILL.md
+          test -f ~/.gemini/antigravity/skills/tirai-evidence/SKILL.md
+      - name: install.ps1 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TIRAI_SOURCE: ${{ github.workspace }}
+        run: |
+          ./install.ps1 --yes --skip ffmpeg,browserskill --agent claude --agent codex --agent antigravity
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$HOME\.local\bin\tirai.cmd" --version
+          & "$HOME\.local\bin\tirai.cmd" setup --dry-run --agent cursor
+          foreach ($p in @('.claude\skills', '.agents\skills', '.gemini\antigravity\skills')) {
+            if (-not (Test-Path (Join-Path $HOME "$p\tirai-evidence\SKILL.md"))) { throw "missing skill in $p" }
+          }

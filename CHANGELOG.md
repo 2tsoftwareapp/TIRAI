@@ -4,6 +4,26 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 
 ---
 
+## [2.1.0] - 2026-11-23
+
+### Added
+
+- One-command installers: `install.sh` (macOS/Linux) and `install.ps1` (Windows) create `~/.tirai/venv`,
+  link `tirai` into `~/.local/bin` and run `tirai setup`.
+- `tirai setup`: installs ffmpeg (brew, apt/dnf/pacman/zypper/apk, winget/choco/scoop), the BrowserSkill CLI
+  (official installer) and skills for detected agents; `--dry-run`, `--yes`, `--skip`.
+- `.env` next to the scenario (or `--env-file`) is loaded automatically on every OS.
+- Scenario `settings:` (hold, timing_scale, expect_timeout) and per-tab `dbx:` overrides.
+- `docs/configuration.md`; CI runs both installers on Linux, macOS and Windows.
+
+### Changed
+
+- Tool and font discovery is cross-platform with env overrides (`BSK_BIN`, `FFMPEG_BIN`, `FFPROBE_BIN`,
+  `TIRAI_FONT`, `TIRAI_SUBTITLE_FONT`); subprocess output is decoded as UTF-8 on Windows.
+- Output video size follows the recorded segments (or `TIRAI_VIDEO_SIZE`) instead of a fixed 1392x704.
+- DBX run shortcut defaults to `Meta+Enter` on macOS.
+- A stale BrowserSkill session left by a previous run is closed and the open is retried.
+
 ## [2.0.0] - 2026-11-23
 
 ### Changed (breaking)

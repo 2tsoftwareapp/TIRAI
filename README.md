@@ -18,18 +18,23 @@ scenario.yaml → dry-run (find failing steps) → record (per tab) → compose 
 
 ## Install
 
-```bash
-# 1. prerequisites: Python 3.10+, ffmpeg, BrowserSkill CLI + browser extension
-curl -fsSL https://raw.githubusercontent.com/Tencent/BrowserSkill/main/install.sh | sh
-# 2. TIRAI CLI
-pipx install "tirai[postgres] @ git+https://github.com/2tsoftwareapp/TIRAI"
-# 3. the skill for your agent (claude | codex | antigravity | cursor | devin | all)
-tirai install-skill --agent claude
-tirai doctor
-```
+One command installs the `tirai` CLI (isolated virtualenv in `~/.tirai`), then `tirai setup` installs
+ffmpeg, the BrowserSkill CLI and the skill for every agent it detects.
 
-Claude Code can also install it as a plugin: `/plugin marketplace add 2tsoftwareapp/TIRAI`, then
+| OS | Command |
+|---|---|
+| macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.sh \| sh` |
+| Windows (PowerShell) | `irm https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/install.ps1 \| iex` |
+
+Then install the **BrowserSkill browser extension** (Chrome Web Store / Edge Add-ons, manual) and run `tirai doctor`.
+
+- Requires Python 3.10+; everything else is installed by `tirai setup` (brew, apt/dnf/pacman/zypper/apk, winget/choco/scoop).
+- Non-interactive: `... | sh -s -- --yes --agent claude` (Windows: `$env:TIRAI_SETUP_ARGS="--yes --agent claude"`).
+- Already have the CLI? `pipx install "tirai[postgres] @ git+https://github.com/2tsoftwareapp/TIRAI"` then `tirai setup`.
+
+Claude Code can also install the skill as a plugin: `/plugin marketplace add 2tsoftwareapp/TIRAI`, then
 `/plugin install tirai-evidence@tirai`. Per-agent details: [docs/agents.md](docs/agents.md).
+All paths and tools can be overridden: [docs/configuration.md](docs/configuration.md).
 
 ## Usage
 
@@ -67,6 +72,7 @@ Try the full demo (web app + PostgreSQL + DBX): [docs/getting-started.md](docs/g
 ## Docs
 
 - [Getting started](docs/getting-started.md)
+- [Configuration](docs/configuration.md)
 - [Scenario format](docs/scenario-format.md)
 - [Annotations](docs/annotations.md)
 - [Agent installation](docs/agents.md)

@@ -11,6 +11,9 @@ The skill is `skills/tirai-evidence/` (SKILL.md + references). Every agent uses 
 | Devin | `tirai install-skill --agent devin --project .` and commit it | `<repo>/.agents/skills` |
 | Other | `tirai install-skill --agent claude --dest <skills dir>` | any directory the agent scans |
 
+`tirai setup` installs the skill for every agent it detects (`~/.claude`, `~/.codex`, `~/.gemini/antigravity`,
+`~/.cursor`); Devin skills are per repository, so use `--project`.
+
 Add `--project <dir>` to install into a repository instead of the user profile, `--force` to overwrite.
 Also install BrowserSkill's own skill so the agent can explore pages: `bsk install-skill --harness <id>`.
 

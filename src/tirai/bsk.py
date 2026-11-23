@@ -1,16 +1,21 @@
 """Thin wrapper over the Tencent BrowserSkill CLI (`bsk`)."""
 
 import json
-import os
-import shutil
-import subprocess
+import re
 import time
 
-BSK = os.environ.get("BSK_BIN") or shutil.which("bsk") or os.path.expanduser("~/.local/bin/bsk")
+from tirai.system import bsk_bin, run_text
 
 
 class BskError(RuntimeError):
     pass
+
+
+def _bsk():
+    path = bsk_bin()
+    if not path:
+        raise BskError("BrowserSkill CLI (bsk) not found; run `tirai setup` or set BSK_BIN")
+    return path
 
 
 class Bsk:
@@ -19,22 +24,29 @@ class Bsk:
 
     def open_session(self, url, scope):
         """Start a fresh scoped session (own Agent Window) on `url`; returns the first tab id."""
-        p = subprocess.run([BSK, "open", url, "--scope", scope, "--json"], capture_output=True, text=True, timeout=90)
-        if p.returncode != 0:
-            raise BskError(f"bsk open failed: {p.stderr.strip() or p.stdout.strip()}")
+        for attempt in range(2):
+            p = run_text([_bsk(), "open", url, "--scope", scope, "--json"], timeout=90)
+            if p.returncode == 0:
+                break
+            err = p.stderr.strip() or p.stdout.strip()
+            stale = re.search(r"session (\w+) unknown", err)
+            if attempt or not stale:
+                raise BskError(f"bsk open failed: {err}")
+            # A previous run's session can linger in the daemon after its window closed; drop it and retry.
+            run_text([_bsk(), "close", "--session", stale.group(1), "--json"], timeout=60)
         data = json.loads(p.stdout)
         self.session = data["session_id"]
         return data["tab_id"]
 
     def close_session(self):
         if self.session:
-            subprocess.run([BSK, "close", "--session", self.session, "--json"], capture_output=True, timeout=60)
+            run_text([_bsk(), "close", "--session", self.session, "--json"], timeout=60)
 
     def run(self, *args, tab=None, timeout=90):
-        cmd = [BSK, *args, "--session", self.session, "--json"]
+        cmd = [_bsk(), *args, "--session", self.session, "--json"]
         if tab is not None:
             cmd += ["--tab-id", str(tab)]
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = run_text(cmd, timeout=timeout)
         out = p.stdout.strip()
         try:
             data = json.loads(out) if out else {}
@@ -99,10 +111,8 @@ class Bsk:
         return rid
 
     def video_stop(self, recording, out):
-        p = subprocess.run(
-            [BSK, "video", "stop", "--recording", recording, "--out", out, "--overwrite", "--json"],
-            capture_output=True,
-            text=True,
+        p = run_text(
+            [_bsk(), "video", "stop", "--recording", recording, "--out", out, "--overwrite", "--json"],
             timeout=180,
         )
         if p.returncode != 0:
