@@ -7,6 +7,7 @@ Writes final.mp4, subtitles.srt, report.md/.html/.xlsx, timeline.final.json and 
 
 import json
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -195,6 +196,46 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
     return dur
 
 
+def fit_voice(tmpd, clip, dur, step, text, engine, lang):
+    """Synthesize the step's narration; hold the clip's last frame until the speech has finished."""
+    from tirai import tts
+
+    wav = tts.synth(text, tmpd / f"voice-{step['id']}.wav", lang=lang, engine=engine)
+    step["_voice"] = str(wav)
+    need = audio_seconds(wav) + 0.6
+    if need <= dur:
+        return dur
+    longer = clip.with_name(clip.stem + "-voiced.mp4")
+    ff("-i", clip.name, "-vf", f"tpad=stop_mode=clone:stop_duration={need - dur:.3f}", "-an",
+       *encode_args(longer), cwd=tmpd)  # fmt: skip
+    shutil.move(longer, clip)
+    return need
+
+
+def add_voiceover(tmpd, final, tl, engine, lang):
+    """Mix each step's narration in at the step's place in the final video."""
+    from tirai import tts
+
+    clips = []
+    for step in tl["steps"]:
+        wav = step.pop("_voice")
+        clips.append((wav, step["final_start"] + 0.2, step["final_end"] - step["final_start"] - 0.2))
+    voiced = tmpd / ("voiced" + final.suffix)
+    ff(
+        "-i", str(final), *[a for c in clips for a in ("-i", str(c[0]))],
+        "-filter_complex", tts.mix_args(clips), "-map", "0:v", "-map", "[voice]",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-shortest", "-map_chapters", "0", str(voiced),
+    )  # fmt: skip
+    shutil.move(voiced, final)
+    return {"engine": tts.available(engine)}
+
+
+def audio_seconds(path):
+    p = run_text([ffmpeg_bin(), "-hide_banner", "-i", str(path)])
+    m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", p.stderr)
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
+
+
 def chapters_file(tmp, tl, title_seconds):
     lines = [";FFMETADATA1", f"title={tl['scenario']}", "", "[CHAPTER]", "TIMEBASE=1/1000", "START=0"]
     lines += [f"END={int(title_seconds * 1000)}", "title=Title", ""]
@@ -230,7 +271,7 @@ def pick_subtitle(step, lang):
     return str(sub.get(lang) or next(iter(sub.values()), step["title"]))
 
 
-def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None):
+def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voice=None):
     """Build final.mp4 (+ subtitles.srt, report.md/html/xlsx, timeline.final.json, manifest.sha256)."""
     if not ffmpeg_bin():
         raise RuntimeError("ffmpeg not found; run `tirai setup` or set FFMPEG_BIN")
@@ -259,6 +300,8 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None):
         for i, step in enumerate(tl["steps"], 1):
             clip = tmpd / f"{i:02d}-{step['id']}.mp4"
             dur = step_clip(tmp, rec_dir, tl, step, clip, lead, size, split_source(rec_dir, tl, i, step))
+            if voice:
+                dur = fit_voice(tmpd, clip, dur, step, pick_subtitle(step, langs[0]), voice, langs[0])
             clips.append(clip)
             for x, cues in srt.items():
                 cues.append(f"{len(cues) + 1}\n{ts(t + 0.2)} --> {ts(t + dur - 0.1)}\n{pick_subtitle(step, x)}\n")
@@ -298,6 +341,8 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None):
             *encode_args(final),
             cwd=tmp,
         )
+        if voice:
+            tl["voiceover"] = add_voiceover(tmpd, final, tl, voice, langs[0])
 
     (rec_dir / "report.md").write_text(report_md(tl, final.name), encoding="utf-8")
     (rec_dir / "timeline.final.json").write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")
