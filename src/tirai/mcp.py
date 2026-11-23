@@ -45,6 +45,12 @@ TOOLS = {
         _obj({"scenario": S, "out": S, "driver": DRIVER, "headed": HEADED, "cwd": CWD}, ["scenario"]),
         lambda a: ["run", a["scenario"], "--dry-run", *_out(a), *_driver(a)],
     ),
+    "inspect": (
+        "Dry-run a scenario (or open a URL) and write, per step, the page's elements with ready-to-use locators "
+        "to <out>/inspect/<step>.md plus a suggested `targets:` block in <out>/inspect/targets.yaml.",
+        _obj({"scenario": S, "out": S, "driver": DRIVER, "headed": HEADED, "cwd": CWD}, ["scenario"]),
+        lambda a: ["inspect", a["scenario"], *_out(a), *_driver(a)],
+    ),
     "record": (
         "Dry-run, record and compose the final video + reports (stops at the first failing phase).",
         _obj(

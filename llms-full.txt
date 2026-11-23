@@ -71,19 +71,20 @@ Key facts for agents:
 
 ```text
 usage: tirai [-h] [--version]
-             {doctor,setup,init,validate,run,compose,record,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
+             {doctor,setup,init,validate,run,inspect,compose,record,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
              ...
 
 Scenario-driven test evidence recorder
 
 positional arguments:
-  {doctor,setup,init,validate,run,compose,record,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
+  {doctor,setup,init,validate,run,inspect,compose,record,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
     doctor              check ffmpeg, BrowserSkill, fonts and optional drivers
     setup               install what is missing (ffmpeg, agent-browser, DBX, skills); reuses tools
                         already here
     init                write a scenario template
     validate            validate a scenario file
     run                 run a scenario (--dry-run or --record)
+    inspect             list each step's page elements with locators + a suggested targets: block
     compose             build final.mp4 + subtitles + report from a recorded timeline
     record              dry-run, record, then compose in one go
     install-skill       install the tirai-evidence skill for an agent
@@ -163,6 +164,22 @@ options:
   --hold HOLD           seconds each step stays on screen
   --dry-run
   --record
+
+usage: tirai inspect [-h] [--env-file ENV_FILE] [--out OUT] [--driver {agent-browser,bsk}]
+                     [--headed] [--session SESSION]
+                     scenario
+
+positional arguments:
+  scenario              scenario file, or a URL to inspect a single page
+
+options:
+  -h, --help            show this help message and exit
+  --env-file ENV_FILE   KEY=VALUE file (default: .env next to the scenario)
+  --out OUT             output root; writes <out>/inspect/ (default: evidence/)
+  --driver {agent-browser,bsk}
+                        browser driver (default: agent-browser)
+  --headed              show the agent-browser window
+  --session SESSION     reuse a live driver session
 
 usage: tirai compose [-h] [--output OUTPUT] [--lead LEAD] [--title-seconds TITLE_SECONDS]
                      [--lang LANG] [--voice [{auto,say,sapi,espeak,cmd}]]
@@ -495,6 +512,63 @@ steps: [...]
 | `layout` | no | `split`: show the previous step (or `split_with: <id>`) beside this one |
 | `once` | no | With `cases:`/`matrix:`, run this step only for the first case |
 | `include` | — | Instead of a step: `include: file.yaml` (+ `with:` vars, `prefix:` for ids) |
+
+## Targets (`@name`)
+
+Name each element once under `targets:` and use `@name` wherever a selector goes: actions, `expect`,
+`annotate`, `zoom` and `privacy.selectors`. Each target lists locators tried in order. The first one that
+matches **exactly one** element (visible elements win over hidden ones) is tagged in the page with
+`data-tirai-id`, and the step addresses it through that attribute.
+
+```yaml
+targets:
+  email: "#email"                          # the site's own id/test id when it has one
+  password: label=Password
+  submit:                                  # fallbacks, tried top to bottom
+    - testid=login-submit
+    - "#submit"
+    - role=button[name="Sign in"]
+  bob_row: { any: ["text*=bob@demo.local"], within: "#users", nth: 0 }
+steps:
+  - id: S1
+    tab: app
+    title: Log in
+    actions:
+      - fill: { selector: "@email", value: "${EMAIL}" }
+      - click: "@submit"
+    expect:
+      - visible: "@bob_row"
+    annotate:
+      - box: "@submit"
+```
+
+| Locator | Matches |
+|---|---|
+| `#id`, `.class`, any CSS (or `css=…`) | `document.querySelectorAll` |
+| `testid=x` | `data-testid`, `data-test-id`, `data-test`, `data-qa`, `data-cy` equal to `x` |
+| `role=button[name="Save"]` | role (`textbox`, `button`, `link`, `combobox`, `checkbox`, `radio`, `heading`, `tab`, `menuitem`, `option`, `cell`, `row`, `dialog`, `img`, or any ARIA role) + exact accessible name; `role=dialog` alone = any |
+| `label=Email` | form field whose label (`<label>`, `aria-label`, `aria-labelledby`) is exactly `Email` |
+| `placeholder=Search` | element with that placeholder |
+| `text=Total` / `text*=Total` | innermost element whose text equals / contains the value |
+
+- `within: <css>` limits the search to one container; `nth: <n>` picks the n-th match (0-based) on purpose.
+- A locator can also be written inline: `click: role=button[name="Sign in"]` works without a `targets:` entry.
+- **No guessing:** 0 or 2+ matches for every locator fails the step and lists what each locator matched,
+  for example `target @save: no locator matched exactly one element (role=button[name="Save"]: 2 [button in form#a, button in form#b])`.
+- **Fallback used:** when an earlier locator stops matching and a later one finds the element, the step still
+  passes, prints `warning: target @submit: #submit: 0 -> used 'role=button[name="Sign in"]'; update the target`,
+  and stores it under `warnings` in `timeline.json`.
+- Tags are kept in sync while the page re-renders (SPA) and are re-applied after navigation. The page only gains
+  the `data-tirai-id` attribute; nothing visible changes.
+- A selector that matches nothing (plain CSS or a target) ends with `; nearby: #email (textbox "Email")`
+  suggestions taken from the current page.
+- Browser tabs only; desktop (`app:`) tabs keep their agent-desktop selectors.
+
+`tirai inspect <scenario>` dry-runs the flow and, after every step, writes `<out>/inspect/<step>.md` (each
+element's role, name and unique locators, preferred first) and one `<out>/inspect/targets.yaml` with a
+ready-to-paste `targets:` block for every page reached, including pages after login. It prefers test ids and
+stable ids/names, skips ids that look generated, and leaves out elements with no unique locator.
+`tirai inspect <url>` does the same for a single page.
 
 ## Actions
 
@@ -950,8 +1024,14 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
 
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
-- Find selectors with `agent-browser open <url>` + `agent-browser snapshot` (or `bsk snapshot`) before writing them; do not guess. Or let the user click
-  the flow once: `tirai capture <url> -o <file>` opens a browser; the user clicks the flow and closes the window.
+- Name elements once under `targets:` and use `@name` in actions/expect/annotate/zoom (fallback locators like
+  `testid=`, `#id`, `role=button[name="Save"]`, `label=`, `text=`; see [references/scenario.md](references/scenario.md)).
+  Get them with `tirai inspect <file>` (or `tirai inspect <url>`): it dry-runs the flow and writes each page's
+  elements plus a ready `targets:` block to `evidence/inspect/`, pages after login included; do not guess.
+  Or let the user click the flow once: `tirai capture <url> -o <file>` opens a browser; the user clicks the flow
+  and closes the window.
+- A failure ending in `nearby: …` lists the page's closest elements: fix the target from it. A `warning: target
+  @x … used …` means a fallback locator was needed: update that target.
 - Database tab: `dbx.connect: {name: ..., host: ...}` on the DBX tab creates the connection from `databases.default`
   (or run `tirai dbx-connect --dsn-env EV_DB_DSN --name <name>`); no manual DBX setup.
 - Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `save:` to reuse on-screen values as `{{name}}`.

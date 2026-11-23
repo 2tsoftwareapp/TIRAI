@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from tirai import db as dbq
+from tirai import targets as tg
 from tirai.agentbrowser import make_driver
 from tirai.bsk import DriverError
 from tirai.desktop import MixedDriver, is_desktop
@@ -69,6 +70,10 @@ class Runner:
         self.dbx_editor_ready = set()
         self.console_since = {}
         self.vars = {}
+        self.targets = scenario.get("_targets") or tg.normalize(scenario.get("targets"))
+        self.warnings = []
+        self.inspect = False
+        self.inspected = []
         self.segments = []
         self.seg = None
         settings = scenario.get("settings") or {}
@@ -229,7 +234,7 @@ class Runner:
         read = f"e.getAttribute({js(attr)})" if attr else "(e.matches('input,textarea,select')?e.value:e.innerText)"
         expr = f"(()=>{{const e=document.querySelector({js(arg['selector'])});return e?{read}:null}})()"
         deadline = time.time() + self.expect_timeout
-        while (value := self.b.evaluate(self.tabs[tab], expr)) is None and time.time() < deadline:
+        while (value := self.page(tab, expr)) is None and time.time() < deadline:
             self.pause(0.5)
         if value is None:
             raise ScenarioError(f"save {arg['name']}: {arg['selector']} not found")
@@ -250,9 +255,43 @@ class Runner:
     def camera_factor(self):
         return float((self.sc.get("settings") or {}).get("camera_factor", 1.6))
 
+    def page(self, tab, expr):
+        """Evaluate a page script with `targets:` (re)tagged first."""
+        return self.b.evaluate(self.tabs[tab], tg.with_tags(self.targets, expr))
+
+    def retarget(self, tab, names):
+        """Tag the targets an action uses, waiting for them like an expectation; fail with what each locator matched."""
+        if not names or is_desktop(self.tabs[tab]):
+            return
+        deadline = time.time() + self.expect_timeout
+        while True:
+            report = self.b.evaluate(self.tabs[tab], tg.tag_expr(self.targets)) or {}
+            if all((report.get(n) or {}).get("ok") for n in names) or time.time() > deadline:
+                break
+            self.pause(0.5)
+        for n in sorted(names):
+            info = report.get(n)
+            if not (info or {}).get("ok"):
+                hint = self.nearby(tab, " ".join(self.targets[n]["locators"]))
+                raise ScenarioError(tg.describe_failure(n, info) + hint)
+            warn = tg.healed(n, self.targets[n], info)
+            if warn and warn not in self.warnings:
+                self.warnings.append(warn)
+                print(f"     warning: {warn}")
+
+    def nearby(self, tab, selector):
+        """'; nearby: …' suggestions for a selector/locator that matched nothing."""
+        try:
+            hits = self.b.evaluate(self.tabs[tab], tg.script() + f";window.__tiraiT.near({js(selector)})")
+        except DriverError:
+            return ""
+        hits = [h for h in hits if isinstance(h, str)] if isinstance(hits, list) else []
+        return f"; nearby: {', '.join(hits)}" if hits else ""
+
     def tracked_action(self, tab, action, rec, follow):
         """Run an action; when recording, note where it happened (camera follow) and long waits (fast-forward)."""
         ((kind, arg),) = action.items()
+        self.retarget(tab, tg.used_in(action))
         t0 = self.now()
         if t0 is not None and follow:
             target = arg.get("selector") if isinstance(arg, dict) else arg
@@ -260,7 +299,18 @@ class Runner:
                 rect = self.target_rect(tab, target)
                 if rect:
                     rec.setdefault("camera", []).append({"t": t0, "rect": rect[:4], "viewport": rect[4:]})
-        self.do_action(tab, action)
+        try:
+            self.do_action(tab, action)
+        except DriverError as e:
+            target = arg.get("selector") if isinstance(arg, dict) else arg
+            if (
+                kind in ("fill", "click", "select", "hover", "scroll", "upload", "press", "wait_for")
+                and isinstance(target, str)
+                and not tg.used_in(target)
+                and not is_desktop(self.tabs[tab])
+            ):
+                raise DriverError(f"{e}{self.nearby(tab, target)}") from None
+            raise
         speed = float((self.sc.get("settings") or {}).get("fast_forward", 4))
         if t0 is not None and kind in ("wait", "wait_for") and speed > 1 and (t1 := self.now()) - t0 >= 1.5:
             rec.setdefault("idle", []).append([round(t0 + 0.3, 3), round(t1 - 0.2, 3), speed])
@@ -272,8 +322,8 @@ class Runner:
             except DriverError:
                 return None
         try:
-            return self.b.evaluate(
-                self.tabs[tab],
+            return self.page(
+                tab,
                 f"(()=>{{const e=document.querySelector({js(selector)});if(!e)return null;"
                 "const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height,innerWidth,innerHeight]})()",
             )
@@ -286,8 +336,8 @@ class Runner:
         rect = (
             self.target_rect(tab, z["target"])
             if is_desktop(self.tabs[tab])
-            else self.b.evaluate(
-                self.tabs[tab],
+            else self.page(
+                tab,
                 f"(()=>{{const e=document.querySelector({js(z['target'])});if(!e)return null;"
                 "const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height,innerWidth,innerHeight]})()",
             )
@@ -417,10 +467,19 @@ class Runner:
             raise ValueError(f"unknown expect {kind}")
         deadline = time.time() + self.expect_timeout
         while True:
-            ok, actual = self.b.evaluate(tid, expr)
+            ok, actual = self.page(tab, expr)
             if ok or time.time() > deadline:
-                return {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok)}
+                break
             self.pause(0.5)
+        if not ok and actual == "not found":
+            names = tg.used_in(arg)
+            if names:
+                report = self.b.evaluate(tid, tg.tag_expr(self.targets)) or {}
+                actual = "; ".join(tg.describe_failure(n, report.get(n)) for n in sorted(names))
+            else:
+                sel = arg if isinstance(arg, str) else arg.get("selector", "")
+                actual += self.nearby(tab, sel)
+        return {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok)}
 
     def console_cursor(self, tab):
         try:
@@ -488,7 +547,7 @@ class Runner:
         cfg = self.privacy_config()
         if not cfg or self.sc["tabs"][tab].get("privacy") is False or is_desktop(self.tabs[tab]):
             return
-        self.b.evaluate(self.tabs[tab], annotate_js() + f";__ann.mask({js(cfg)})")
+        self.page(tab, annotate_js() + f";__ann.mask({js(cfg)})")
 
     def annotate(self, tab, items):
         if is_desktop(self.tabs[tab]):
@@ -507,13 +566,15 @@ class Runner:
             else:
                 calls.append(f"__ann.{kind}({js(target)},{js(a)})")
         expr = annotate_js() + ";(()=>{" + ";".join(calls) + ";return __ann.list()})()"
-        return self.b.evaluate(self.tabs[tab], expr)
+        return self.page(tab, expr) if items else self.b.evaluate(self.tabs[tab], expr)
 
     # ---------- main loop ----------
     def run(self):
         self.own_session = not self.b.session
         if self.own_session and hasattr(self.b, "init_scripts") and (init := self.privacy_init_script()):
             self.b.init_scripts.append(init)
+        if self.own_session and hasattr(self.b, "init_scripts") and self.targets:
+            self.b.init_scripts.insert(0, tg.init_script(self.targets))  # before privacy: masks may use @targets
         try:
             return self.run_steps()
         finally:
@@ -529,6 +590,7 @@ class Runner:
         results = []
         for step in self.sc["steps"]:
             self.saved = {}
+            self.warnings = []
             # Titles render leniently; actions/expectations render right before use so a value saved
             # earlier in the same step is available to the next action or check.
             step = {**step, **render({k: step[k] for k in ("title", "subtitle") if k in step}, self.vars)}
@@ -569,6 +631,15 @@ class Runner:
                 rec["status"], rec["error"] = "error", str(e)
             if self.saved:
                 rec["saved"] = dict(self.saved)
+            if self.warnings:
+                rec["warnings"] = list(self.warnings)
+            if self.inspect and not is_desktop(self.tabs[tab]):
+                try:
+                    url = self.b.evaluate(self.tabs[tab], "location.href")
+                    els = self.page(tab, tg.script() + ";window.__tiraiT.elements()")
+                    self.inspected.append({"step": step["id"], "title": step["title"], "url": url, "elements": els})
+                except DriverError as e:
+                    print(f"     inspect failed: {e}")
             time.sleep(step.get("hold", self.hold))
             shot = self.out / f"step-{step['id']}.png"
             try:
