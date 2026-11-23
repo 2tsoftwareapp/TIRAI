@@ -98,18 +98,18 @@ Every path and tool can be overridden — see [configuration](docs/configuration
 
 ```mermaid
 flowchart LR
-    S[scenario.yaml] --> D[Dry-run<br>all steps must pass]
-    D --> R[Record<br>one segment per tab]
-    R --> C[Compose<br>ffmpeg]
-    C --> O[final.mp4<br>subtitles.srt<br>report.md]
+    S["scenario.yaml"] --> D["Dry-run<br/>all steps must pass"]
+    D --> R["Record<br/>one segment per tab"]
+    R --> C["Compose<br/>ffmpeg"]
+    C --> O["final.mp4<br/>subtitles.srt<br/>report.md"]
 
-    subgraph Browser [Real Chrome / Edge via BrowserSkill]
-        A[App tab]
-        B[DBX tab]
+    subgraph Browser["Real Chrome / Edge via BrowserSkill"]
+        A["App tab"]
+        B["DBX tab"]
     end
-    D -. fill · click · expect .-> Browser
-    R -. bsk video + annotate.js .-> Browser
-    R -. read-only SQL .-> DB[(Database)]
+    D -->|"fill, click, expect"| Browser
+    R -->|"bsk video, annotate.js"| Browser
+    R -->|"read-only SQL"| DB[("Database")]
 ```
 
 TIRAI is the orchestration layer. It does not reinvent browser automation or a database UI:

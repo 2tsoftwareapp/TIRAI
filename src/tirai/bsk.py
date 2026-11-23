@@ -24,16 +24,19 @@ class Bsk:
 
     def open_session(self, url, scope):
         """Start a fresh scoped session (own Agent Window) on `url`; returns the first tab id."""
-        for attempt in range(2):
-            p = run_text([_bsk(), "open", url, "--scope", scope, "--json"], timeout=90)
+        # The daemon can keep a closed session bound to the scope for a moment ("session X unknown").
+        # Close it and retry; as a last resort use a scope unique to this run.
+        scopes = [scope, scope, f"{scope}-{int(time.time())}"]
+        for attempt, sc in enumerate(scopes):
+            p = run_text([_bsk(), "open", url, "--scope", sc, "--json"], timeout=90)
             if p.returncode == 0:
                 break
             err = p.stderr.strip() or p.stdout.strip()
             stale = re.search(r"session (\w+) unknown", err)
-            if attempt or not stale:
+            if not stale or attempt == len(scopes) - 1:
                 raise BskError(f"bsk open failed: {err}")
-            # A previous run's session can linger in the daemon after its window closed; drop it and retry.
             run_text([_bsk(), "close", "--session", stale.group(1), "--json"], timeout=60)
+            time.sleep(1 + attempt)
         data = json.loads(p.stdout)
         self.session = data["session_id"]
         return data["tab_id"]
