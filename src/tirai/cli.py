@@ -16,9 +16,30 @@ def cmd_doctor(_args):
     return doctor.run()
 
 
+def cmd_setup(args):
+    from tirai import bootstrap
+    from tirai.install import TARGETS
+
+    agents = (list(TARGETS) if "all" in args.agent else args.agent) if args.agent else None
+    skip = {x.strip() for item in args.skip for x in item.split(",") if x.strip()}
+    return bootstrap.run(agents=agents, project=args.project, yes=args.yes, dry_run=args.dry_run, skip=skip)
+
+
+def load_env(args):
+    """Load KEY=VALUE pairs from --env-file, else from a .env next to the scenario; real env vars win."""
+    from tirai.scenario import load_env_file
+
+    path = Path(args.env_file) if getattr(args, "env_file", None) else Path(args.scenario).parent / ".env"
+    if getattr(args, "env_file", None) and not path.is_file():
+        raise SystemExit(f"env file not found: {path}")
+    if path.is_file():
+        load_env_file(path)
+
+
 def cmd_validate(args):
     from tirai.scenario import ScenarioError, env_vars, load
 
+    load_env(args)
     try:
         sc = load(args.scenario)
     except ScenarioError as e:
@@ -42,6 +63,7 @@ def cmd_run(args):
     from tirai import runner
     from tirai.scenario import ScenarioError, load
 
+    load_env(args)
     try:
         sc = load(args.scenario)
     except ScenarioError as e:
@@ -109,6 +131,19 @@ def build_parser():
 
     sub.add_parser("doctor", help="check ffmpeg, BrowserSkill, fonts and optional drivers").set_defaults(fn=cmd_doctor)
 
+    s = sub.add_parser("setup", help="install ffmpeg, BrowserSkill CLI and agent skills for this OS")
+    s.add_argument(
+        "--agent",
+        action="append",
+        choices=[*TARGETS, "all"],
+        help="agents to install the skill for (default: detected ones)",
+    )
+    s.add_argument("--project", help="install skills into this project instead of the user profile")
+    s.add_argument("--skip", action="append", default=[], help="comma list: ffmpeg, browserskill, skills")
+    s.add_argument("--yes", "-y", action="store_true", help="install without prompting")
+    s.add_argument("--dry-run", action="store_true", help="print what would be installed")
+    s.set_defaults(fn=cmd_setup)
+
     s = sub.add_parser("init", help="write a scenario template")
     s.add_argument("path", nargs="?", default="scenarios/example.yaml")
     s.add_argument("--force", action="store_true")
@@ -116,10 +151,12 @@ def build_parser():
 
     s = sub.add_parser("validate", help="validate a scenario file")
     s.add_argument("scenario")
+    s.add_argument("--env-file", help="KEY=VALUE file (default: .env next to the scenario)")
     s.set_defaults(fn=cmd_validate)
 
     def run_opts(s):
         s.add_argument("scenario")
+        s.add_argument("--env-file", help="KEY=VALUE file (default: .env next to the scenario)")
         s.add_argument("--out", default="evidence", help="output root (default: evidence/)")
         s.add_argument("--session", help="reuse a live bsk session instead of opening a fresh one")
         s.add_argument("--scope", default="tirai", help="bsk scope for the fresh session")

@@ -1,5 +1,4 @@
 import json
-import shutil
 import subprocess
 
 import pytest
@@ -12,11 +11,14 @@ def test_srt_timestamps():
     assert compose.ts(3725.5) == "01:02:05,500"
 
 
-def test_filter_path_escapes_windows_paths():
-    assert compose._filter_path("C:\\Windows\\Fonts\\arial.ttf") == "C\\:/Windows/Fonts/arial.ttf"
+def test_frame_size_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIRAI_VIDEO_SIZE", "1921x1081")
+    assert compose.frame_size({"steps": []}, tmp_path) == (1920, 1080)
+    monkeypatch.delenv("TIRAI_VIDEO_SIZE")
+    assert compose.frame_size({"steps": []}, tmp_path) == compose.DEFAULT_SIZE
 
 
-@pytest.mark.skipif(not shutil.which("ffmpeg") or not compose.find_font(), reason="needs ffmpeg and a font")
+@pytest.mark.skipif(not compose.ffmpeg_bin() or not compose.find_font(), reason="needs ffmpeg and a font")
 def test_compose_two_tab_segments(tmp_path):
     for name, color in (("seg-01-app.mp4", "blue"), ("seg-02-db.mp4", "purple")):
         subprocess.run(
@@ -57,7 +59,7 @@ def test_compose_two_tab_segments(tmp_path):
         check=True,
     )
     info = json.loads(probe.stdout)
-    assert (info["streams"][0]["width"], info["streams"][0]["height"]) == (compose.W, compose.FH)
+    assert (info["streams"][0]["width"], info["streams"][0]["height"]) == (640, 360 + compose.TOP + compose.BOTTOM)
     assert abs(float(info["format"]["duration"]) - seconds) < 0.3
     assert "Bước 1" in (tmp_path / "subtitles.srt").read_text(encoding="utf-8")
     assert "| S2 | DB |" in (tmp_path / "report.md").read_text(encoding="utf-8")
@@ -65,7 +67,7 @@ def test_compose_two_tab_segments(tmp_path):
 
 def test_compose_rejects_dry_run(tmp_path):
     (tmp_path / "timeline.json").write_text(json.dumps({"mode": "dry-run"}))
-    if not shutil.which("ffmpeg") or not compose.find_font():
+    if not compose.ffmpeg_bin() or not compose.find_font():
         pytest.skip("needs ffmpeg and a font")
     with pytest.raises(ValueError):
         compose.compose(tmp_path / "timeline.json")

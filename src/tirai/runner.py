@@ -5,6 +5,7 @@ record:  same flow, one MP4 per contiguous tab block, plus timeline.json for `ti
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -12,6 +13,14 @@ from tirai import db as dbq
 from tirai.bsk import Bsk, BskError
 from tirai.resources import annotate_js
 from tirai.scenario import ScenarioError, interpolate
+from tirai.system import primary_modifier
+
+DBX_DEFAULTS = {
+    "new_query": "New Query",  # button text that opens a SQL editor
+    "editor": ".cm-content",
+    "password": "input[type=password]",
+    "run_key": None,  # default: Meta+Enter on macOS, Ctrl+Enter elsewhere
+}
 
 
 def js(v):
@@ -31,6 +40,18 @@ class Runner:
         self.dbx_editor_ready = set()
         self.segments = []
         self.seg = None
+        settings = scenario.get("settings") or {}
+        self.timing = float(os.environ.get("TIRAI_TIMING_SCALE") or settings.get("timing_scale", 1.0))
+        self.expect_timeout = float(os.environ.get("TIRAI_EXPECT_TIMEOUT") or settings.get("expect_timeout", 6))
+
+    def pause(self, seconds):
+        """Settle delay after UI actions; scale with TIRAI_TIMING_SCALE / settings.timing_scale on slow machines."""
+        time.sleep(seconds * self.timing)
+
+    def dbx(self, tab):
+        cfg = {**DBX_DEFAULTS, **(self.sc["tabs"][tab].get("dbx") or {})}
+        cfg["run_key"] = cfg["run_key"] or f"{primary_modifier()}+Enter"
+        return cfg
 
     # ---------- tabs / setup ----------
     def open_tabs(self):
@@ -39,7 +60,7 @@ class Runner:
                 self.tabs[name] = self.b.open_session(interpolate(cfg["url"]), self.scope)
             else:
                 self.tabs[name] = self.b.tab_create(interpolate(cfg["url"]))
-            time.sleep(1.5)
+            self.pause(1.5)
             self.b.sync(self.tabs[name])
             for action in cfg.get("setup", []):
                 self.do_action(name, action)
@@ -50,20 +71,20 @@ class Runner:
             return
         self.close_segment()
         self.b.tab_select(self.tabs[tab])
-        time.sleep(0.8)
+        self.pause(0.8)
         if not self.record:
             self.seg = {"tab": tab}
             return
         idx = len(self.segments) + 1
         rid = self.b.video_start(self.tabs[tab])
         self.seg = {"tab": tab, "recording": rid, "t0": time.monotonic(), "file": f"seg-{idx:02d}-{tab}.mp4"}
-        time.sleep(1.0)
+        self.pause(1.0)
 
     def close_segment(self):
         if not self.seg:
             return
         if self.record:
-            time.sleep(0.6)
+            self.pause(0.6)
             self.seg["duration"] = round(time.monotonic() - self.seg["t0"], 3)
             self.b.video_stop(self.seg["recording"], str(self.out / self.seg["file"]))
             self.segments.append({k: self.seg[k] for k in ("tab", "file", "duration")})
@@ -78,25 +99,26 @@ class Runner:
         tid = self.tabs[tab]
         if kind == "navigate":
             self.b.navigate(tid, interpolate(arg))
-            time.sleep(1.0)
+            self.pause(1.0)
         elif kind == "fill":
             self.b.fill(tid, arg["selector"], interpolate(arg["value"]))
         elif kind == "click":
             self.b.click(tid, arg)
-            time.sleep(1.0)
+            self.pause(1.0)
         elif kind == "press":
             arg = {"key": arg} if isinstance(arg, str) else arg
             self.b.press(tid, arg["key"], arg.get("selector"))
-            time.sleep(0.5)
+            self.pause(0.5)
         elif kind == "wait":
             time.sleep(float(arg) / 1000)
         elif kind == "wait_for":
             self.b.wait_for(tid, arg)
         elif kind == "dbx_login":
-            if self.b.evaluate(tid, "!!document.querySelector('input[type=password]')"):
-                self.b.fill(tid, "input[type=password]", interpolate(arg))
-                self.b.press(tid, "Enter", "input[type=password]")
-                time.sleep(2.0)
+            pw = self.dbx(tab)["password"]
+            if self.b.evaluate(tid, f"!!document.querySelector({js(pw)})"):
+                self.b.fill(tid, pw, interpolate(arg))
+                self.b.press(tid, "Enter", pw)
+                self.pause(2.0)
         elif kind == "sql":
             self.dbx_sql(tab, interpolate(arg))
         else:
@@ -104,18 +126,19 @@ class Runner:
 
     def dbx_sql(self, tab, sql):
         tid = self.tabs[tab]
+        cfg = self.dbx(tab)
         if tab not in self.dbx_editor_ready:
             self.b.evaluate(
                 tid,
                 "(()=>{const b=[...document.querySelectorAll('button')]"
-                ".find(b=>b.innerText.trim()==='New Query'); b&&b.click(); return !!b})()",
+                f".find(b=>b.innerText.trim()==={js(cfg['new_query'])}); b&&b.click(); return !!b}})()",
             )
-            time.sleep(1.5)
+            self.pause(1.5)
             self.dbx_editor_ready.add(tab)
-        self.b.fill(tid, ".cm-content", sql)
-        time.sleep(0.6)
-        self.b.press(tid, "Ctrl+Enter", ".cm-content")
-        time.sleep(2.0)
+        self.b.fill(tid, cfg["editor"], sql)
+        self.pause(0.6)
+        self.b.press(tid, cfg["run_key"], cfg["editor"])
+        self.pause(2.0)
 
     # ---------- expectations ----------
     def check(self, tab, exp):
@@ -139,12 +162,12 @@ class Runner:
             expr = f"[location.href.includes({js(arg)}),location.href]"
         else:
             raise ValueError(f"unknown expect {kind}")
-        deadline = time.time() + 6
+        deadline = time.time() + self.expect_timeout
         while True:
             ok, actual = self.b.evaluate(tid, expr)
             if ok or time.time() > deadline:
                 return {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok)}
-            time.sleep(0.5)
+            self.pause(0.5)
 
     def check_db(self, arg):
         db = self.sc["databases"][arg.get("database", "default")]
@@ -233,7 +256,8 @@ def run(scenario, out_dir, record, session=None, scope="tirai", hold=None):
     """Run `scenario` and write timeline.json into `out_dir`; returns the timeline dict."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    hold = hold if hold is not None else (2.5 if record else 0.3)
+    settings = scenario.get("settings") or {}
+    hold = hold if hold is not None else float(settings.get("hold", 2.5) if record else 0.3)
     r = Runner(scenario, out, session, record, hold, stop_on_fail=record, scope=scope)
     steps = r.run()
     timeline = {

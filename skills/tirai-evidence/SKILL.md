@@ -10,12 +10,13 @@ Workflow: **scenario → dry-run → record → compose**. Never record before t
 ## 0. Check the environment (once per machine)
 
 ```bash
-tirai doctor
+tirai doctor            # if tirai is missing or a check fails: see references/setup.md
+tirai setup --yes       # installs ffmpeg, BrowserSkill CLI and skills for this OS
 ```
 
-All required checks must be `ok`. If something fails, follow
-[references/setup.md](references/setup.md) (installs `tirai`, ffmpeg, BrowserSkill CLI + extension,
-optional DBX web). The user installs the browser extension themselves; never use `sudo` without asking.
+All required checks must be `ok`. Works on macOS, Linux and Windows; follow
+[references/setup.md](references/setup.md). The user installs the browser extension themselves;
+never use `sudo` without asking.
 
 ## 1. Write the scenario with the user
 
@@ -39,7 +40,8 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
 - Find selectors with `bsk open <url>` / `bsk snapshot` before writing them; do not guess.
-- Secrets go in `${ENV_VAR}` only. Ask the user to export them; never write values into the file.
+- Secrets go in `${ENV_VAR}` only. Put values in a git-ignored `.env` next to the scenario
+  (loaded automatically, or pass `--env-file`); never write values into the scenario.
 - DB checks must use a **read-only** database user.
 
 Then `tirai validate <file>` and fix every reported problem.

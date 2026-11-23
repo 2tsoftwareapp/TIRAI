@@ -8,45 +8,57 @@ Writes final.mp4, subtitles.srt, report.md and timeline.final.json next to the t
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
-W, H, FPS = 1392, 704, 30
+from tirai.system import ffmpeg_bin, ffprobe_bin, find_font, run_text, subtitle_font_name
+
+FPS = 30
 TOP, BOTTOM = 40, 64  # header bar (tab/step/status) and subtitle band
-FH = H + TOP + BOTTOM
+DEFAULT_SIZE = (1280, 720)
 TAB_COLORS = ["0x1f6feb", "0x7c3aed", "0x0e7490", "0xb45309"]
-FONT_CANDIDATES = {
-    False: [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/Library/Fonts/Arial Unicode.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-    ],
-    True: [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        "C:/Windows/Fonts/arialbd.ttf",
-    ],
-}
-
-
-def find_font(bold=False):
-    """TIRAI_FONT / TIRAI_FONT_BOLD, else a platform default with Vietnamese/Unicode glyphs."""
-    env = os.environ.get("TIRAI_FONT_BOLD" if bold else "TIRAI_FONT")
-    for p in ([env] if env else []) + FONT_CANDIDATES[bold]:
-        if Path(p).is_file():
-            return p
-    return find_font(False) if bold else None
-
-
-def _filter_path(p):
-    """Escape a path for use inside an ffmpeg filter argument (Windows drive colons, backslashes)."""
-    return str(p).replace("\\", "/").replace(":", r"\:")
 
 
 def ff(*args, cwd=None):
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args], check=True, cwd=cwd)
+    p = run_text([ffmpeg_bin() or "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args], cwd=cwd)
+    if p.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {p.stderr.strip()[-600:]}")
+
+
+def video_size(path):
+    """Width/height of a recording (even numbers for yuv420p); falls back to 1280x720."""
+    probe = ffprobe_bin()
+    if probe:
+        p = run_text(
+            [
+                probe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0:s=x",
+                str(path),
+            ]
+        )
+        try:
+            w, h = (int(v) for v in p.stdout.strip().split("x")[:2])
+            return w - w % 2, h - h % 2
+        except ValueError:
+            pass
+    return DEFAULT_SIZE
+
+
+def frame_size(tl, rec_dir):
+    """Content size: TIRAI_VIDEO_SIZE=WxH, else the largest recorded segment."""
+    env = os.environ.get("TIRAI_VIDEO_SIZE")
+    if env:
+        w, h = (int(v) for v in env.lower().split("x"))
+        return w - w % 2, h - h % 2
+    sizes = [video_size(rec_dir / s["segment"]) for s in tl["steps"] if s.get("segment")]
+    return max(sizes, key=lambda s: s[0] * s[1]) if sizes else DEFAULT_SIZE
 
 
 def ts(sec):
@@ -75,19 +87,20 @@ def encode_args(out):
     ]
 
 
-def title_card(tmp, tl, out, seconds, fonts):
+def title_card(tmp, tl, out, seconds, frame):
+    W, H = frame
+    FH = H + TOP + BOTTOM
     passed = sum(s["status"] == "passed" for s in tl["steps"])
     lines = [
-        (tl["scenario"], 44, fonts[1], -60),
-        (f"{passed}/{len(tl['steps'])} steps passed  ·  recorded {tl['created']}", 24, fonts[0], 10),
-        ("Evidence: BrowserSkill recording + TIRAI annotations", 20, fonts[0], 60),
+        (tl["scenario"], 44, "font-bold.ttf", -60),
+        (f"{passed}/{len(tl['steps'])} steps passed  ·  recorded {tl['created']}", 24, "font.ttf", 10),
+        ("Evidence: BrowserSkill recording + TIRAI annotations", 20, "font.ttf", 60),
     ]
     draws = []
     for i, (txt, size, font, dy) in enumerate(lines):
         f = text_file(tmp, f"title{i}.txt", txt)
         draws.append(
-            f"drawtext=fontfile={_filter_path(font)}:textfile={f}:fontsize={size}:fontcolor=white:"
-            f"x=(w-text_w)/2:y=(h-text_h)/2+{dy}"
+            f"drawtext=fontfile={font}:textfile={f}:fontsize={size}:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2+{dy}"
         )
     ff(
         "-f",
@@ -101,7 +114,9 @@ def title_card(tmp, tl, out, seconds, fonts):
     )
 
 
-def step_clip(tmp, rec_dir, tl, step, out, lead, fonts):
+def step_clip(tmp, rec_dir, tl, step, out, lead, frame):
+    W, H = frame
+    FH = H + TOP + BOTTOM
     seg = rec_dir / step["segment"]
     start = max(0.0, step["start"] - lead)
     dur = step["end"] - start
@@ -111,7 +126,7 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, fonts):
     hdr = text_file(tmp, f"hdr-{step['id']}.txt", f"{label}   |   {step['id']}  {step['title']}")
     st = text_file(tmp, f"st-{step['id']}.txt", status)
     st_color = "0x16a34a" if status == "PASS" else "0xdc2626"
-    bold = _filter_path(fonts[1])
+    bold = "font-bold.ttf"
     vf = (
         f"fps={FPS},tpad=stop_mode=clone:stop_duration=10,"
         f"trim=start={start:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,"
@@ -127,8 +142,8 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, fonts):
 
 def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0):
     """Build final.mp4 (+ subtitles.srt, report.md, timeline.final.json); returns the final video path."""
-    if not shutil.which("ffmpeg"):
-        raise RuntimeError("ffmpeg not found on PATH")
+    if not ffmpeg_bin():
+        raise RuntimeError("ffmpeg not found; run `tirai setup` or set FFMPEG_BIN")
     fonts = (find_font(False), find_font(True))
     if not fonts[0]:
         raise RuntimeError("no font found; set TIRAI_FONT to a .ttf file")
@@ -141,14 +156,18 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0):
 
     with tempfile.TemporaryDirectory() as tmp:
         tmpd = Path(tmp)
+        # Fonts are copied next to the filter inputs so every ffmpeg path is relative (no drive-letter escaping).
+        shutil.copyfile(fonts[0], tmpd / "font.ttf")
+        shutil.copyfile(fonts[1], tmpd / "font-bold.ttf")
+        size = frame_size(tl, rec_dir)
         clips, srt, t = [], [], 0.0
         title = tmpd / "00-title.mp4"
-        title_card(tmp, tl, title, title_seconds, fonts)
+        title_card(tmp, tl, title, title_seconds, size)
         clips.append(title)
         t += title_seconds
         for i, step in enumerate(tl["steps"], 1):
             clip = tmpd / f"{i:02d}-{step['id']}.mp4"
-            dur = step_clip(tmp, rec_dir, tl, step, clip, lead, fonts)
+            dur = step_clip(tmp, rec_dir, tl, step, clip, lead, size)
             clips.append(clip)
             srt.append(f"{len(srt) + 1}\n{ts(t + 0.2)} --> {ts(t + dur - 0.1)}\n{step['subtitle']}\n")
             step["final_start"], step["final_end"] = round(t, 3), round(t + dur, 3)
@@ -158,13 +177,20 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0):
         srt_text = "\n".join(srt)
         (rec_dir / "subtitles.srt").write_text(srt_text, encoding="utf-8")
         (tmpd / "subs.srt").write_text(srt_text, encoding="utf-8")
-        # libass scales SRT styles from a 288px-high canvas: FontSize 10 ~ 28px, MarginV 6 ~ 17px here.
-        font_name = "DejaVu Sans" if "DejaVu" in fonts[0] else "Arial"
+        # libass scales SRT styles from a 288px-high canvas: FontSize 10 ~ 28px, MarginV 6 ~ 17px at 808px.
+        font_name = subtitle_font_name()
         style = (
             f"FontName={font_name},FontSize=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
             "BorderStyle=1,Outline=0.6,Shadow=0,MarginV=6,Alignment=2"
         )
-        ff("-i", "joined.mp4", "-vf", f"subtitles=subs.srt:force_style='{style}'", *encode_args(final), cwd=tmp)
+        ff(
+            "-i",
+            "joined.mp4",
+            "-vf",
+            f"subtitles=subs.srt:fontsdir=.:force_style='{style}'",
+            *encode_args(final),
+            cwd=tmp,
+        )
 
     (rec_dir / "report.md").write_text(report_md(tl, final.name), encoding="utf-8")
     (rec_dir / "timeline.final.json").write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")

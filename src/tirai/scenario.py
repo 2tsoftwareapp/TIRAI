@@ -9,6 +9,8 @@ import yaml
 ACTIONS = {"navigate", "fill", "click", "press", "wait", "wait_for", "sql", "dbx_login"}
 EXPECTS = {"visible", "text_contains", "url_contains", "db"}
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
+SETTINGS = {"hold", "timing_scale", "expect_timeout"}
+DBX_KEYS = {"new_query", "editor", "password", "run_key"}
 ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -65,6 +67,13 @@ def validate(sc) -> list[str]:
         return ["scenario must be a mapping"]
     if not sc.get("name"):
         errors.append("name: required")
+    settings = sc.get("settings") or {}
+    if not isinstance(settings, dict):
+        errors.append("settings: must be a mapping")
+        settings = {}
+    for key in settings:
+        if key not in SETTINGS:
+            errors.append(f"settings.{key}: unknown (allowed: {', '.join(sorted(SETTINGS))})")
     tabs = sc.get("tabs")
     if not isinstance(tabs, dict) or not tabs:
         errors.append("tabs: at least one tab is required")
@@ -73,6 +82,9 @@ def validate(sc) -> list[str]:
         if not isinstance(cfg, dict) or not cfg.get("url"):
             errors.append(f"tabs.{name}: url is required")
             continue
+        for key in cfg.get("dbx") or {}:
+            if key not in DBX_KEYS:
+                errors.append(f"tabs.{name}.dbx.{key}: unknown (allowed: {', '.join(sorted(DBX_KEYS))})")
         for i, a in enumerate(cfg.get("setup", []) or []):
             _single_key(a, f"tabs.{name}.setup[{i}]", ACTIONS, errors)
     steps = sc.get("steps")
@@ -116,6 +128,20 @@ def validate(sc) -> list[str]:
             if kind and not (isinstance(a[kind], (str, dict)) and (isinstance(a[kind], str) or "target" in a[kind])):
                 errors.append(f"{where}.annotate[{j}]: {kind} needs a target")
     return errors
+
+
+def load_env_file(path):
+    """Minimal .env reader (KEY=VALUE, # comments, optional quotes); existing env vars are not overridden."""
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.removeprefix("export ").strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
 
 
 def load(path) -> dict:
