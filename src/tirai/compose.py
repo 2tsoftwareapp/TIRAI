@@ -166,6 +166,44 @@ def warp(idle, clip_start):
     return f"setpts='(T-({'+'.join(terms)}))/TB',fps={FPS},", saved, shown
 
 
+STILL_SPEED = 8.0
+STILL_MIN = 2.0
+
+
+def freezes(path, min_seconds=STILL_MIN):
+    """[(start, end)] where the recording does not change for `min_seconds` or more (ffmpeg freezedetect)."""
+    p = run_text(
+        [ffmpeg_bin() or "ffmpeg", "-hide_banner", "-i", str(path), "-map", "0:v",
+         "-vf", f"freezedetect=n=-60dB:d={min_seconds}", "-f", "null", "-"]
+    )  # fmt: skip
+    starts = [float(x) for x in re.findall(r"freeze_start: ([\d.]+)", p.stderr)]
+    ends = [float(x) for x in re.findall(r"freeze_end: ([\d.]+)", p.stderr)]
+    ends += [video_duration(path)] * (len(starts) - len(ends))  # still frozen when the recording ends
+    return list(zip(starts, ends, strict=False))
+
+
+def video_duration(path):
+    p = run_text([ffprobe_bin() or "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                  str(path)])  # fmt: skip
+    try:
+        return float(p.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
+def add_still_spans(step, spans, hold):
+    """Fast-forward still stretches inside the step, keeping its start and the closing `hold` at normal speed."""
+    lo, hi = step["start"] + 0.3, step["end"] - hold - 0.3
+    idle = [list(x) for x in step.get("idle") or []]
+    for a, b in spans:
+        a, b = max(a + 0.3, lo), min(b - 0.3, hi)
+        if b - a < 1.0 or any(a < y and x < b for x, y, _ in idle):
+            continue
+        idle.append([round(a, 3), round(b, 3), STILL_SPEED])
+    if idle:
+        step["idle"] = sorted(idle)
+
+
 def zoom_filter(step, seg_size, clip_start=0.0):
     """Ease into the step's `zoom` target (rect captured by the runner) and hold; '' when not zoomed."""
     z = step.get("zoom")
@@ -345,7 +383,7 @@ def pick_subtitle(step, lang):
     return str(sub.get(lang) or next(iter(sub.values()), step["title"]))
 
 
-def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voice=None):
+def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voice=None, trim_still=False):
     """Build final.mp4 (+ subtitles.srt, report.md/html/xlsx, timeline.final.json, manifest.sha256)."""
     if not ffmpeg_bin():
         raise RuntimeError("ffmpeg not found; run `tirai setup` or set FFMPEG_BIN")
@@ -358,6 +396,11 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
         raise ValueError("timeline was not recorded; run `tirai run --record` first")
     rec_dir = tl_path.parent
     final = Path(out) if out else rec_dir / "final.mp4"
+    if trim_still or tl.get("trim_still"):
+        found = {seg["file"]: freezes(rec_dir / seg["file"]) for seg in tl.get("segments", [])}
+        for step in tl["steps"]:
+            if step.get("segment") in found and step.get("end") is not None:
+                add_still_spans(step, found[step["segment"]], float(tl.get("hold", 2.5)))
 
     with tempfile.TemporaryDirectory() as tmp:
         tmpd = Path(tmp)
@@ -457,4 +500,4 @@ def report_md(tl, video_name):
             f"| {s['id']} | {tl['tabs'][s['tab']]['label']} | {s['title']} | {s['status'].upper()} | "
             f"{when} | {checks} |"
         )
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines + report.extra_md(tl)) + "\n"

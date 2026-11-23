@@ -13,6 +13,7 @@ TARGETS = {
     "antigravity": ("~/.gemini/antigravity/skills", ".agent/skills"),
     "cursor": ("~/.cursor/skills", ".cursor/skills"),
     "devin": ("~/.agents/skills", ".agents/skills"),
+    "agents": ("~/.agents/skills", ".agents/skills"),  # any harness reading the shared .agents/skills folder
 }
 
 

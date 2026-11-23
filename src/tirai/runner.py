@@ -980,6 +980,7 @@ def run(
         **({"from_step": from_step} if from_step else {}),
         **({"cleanup": r.cleanup_results} if r.cleanup_results else {}),
         "hold": hold,
+        **({"trim_still": True} if settings.get("trim_still") else {}),
     }
     (out / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8")
     return timeline
