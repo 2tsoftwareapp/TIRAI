@@ -31,6 +31,10 @@ def annotate_js() -> str:
     return annotate_js_path().read_text(encoding="utf-8")
 
 
+def asset_text(name) -> str:
+    return Path(str(files("tirai") / "assets" / name)).read_text(encoding="utf-8")
+
+
 def skill_dir() -> Path:
     """Skill bundled in the wheel, or `skills/tirai-evidence` of a source checkout."""
     bundled = Path(str(files("tirai") / "skill" / "tirai-evidence"))
