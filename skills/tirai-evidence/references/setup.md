@@ -17,7 +17,7 @@ It installs, with the OS package manager or official installer:
 
 Manual steps the user must do (ask them; never automate):
 
-- Only for `driver: bsk` / `tirai capture`: install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons.
+- Only for `driver: bsk`: install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons.
 - For database tabs, start DBX web: `DBX_PASSWORD=... tirai dbx -d` (installed binary, or Docker)
   and create a connection with a **read-only** database user.
 

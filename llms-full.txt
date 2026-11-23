@@ -26,7 +26,9 @@ Key facts for agents:
   when one exists, otherwise builds from source with Python >= 3.10, or with uv + a private Python 3.12 in `~/.tirai`
   when the machine has no suitable Python (`--binary` / `--source` force a method). It links `tirai` into
   `~/.local/bin` and runs `tirai setup` (ffmpeg >= 6.0, upgraded to a static build when older; agent-browser binary + Chrome for Testing; DBX web package or Docker image; BrowserSkill CLI; agent skills). `tirai dbx -d` starts DBX web.
-- Only `driver: bsk` and `tirai capture` need the BrowserSkill browser extension, installed by the human.
+- Only `driver: bsk` needs the BrowserSkill browser extension, installed by the human.
+- `tirai setup` downloads pinned, SHA-256-verified agent-browser, DBX web and ffmpeg builds.
+- `dbx.connect:` on a DBX tab (or `tirai dbx-connect`) creates the DBX connection from the scenario DSN.
   Never automate it. Never run `sudo` without asking; if a package install needs a password, ask the user.
 - Verify with `tirai doctor`: every required check must be `ok` before running scenarios.
 - Secrets only as `${ENV_VAR}` in scenarios; values live in the environment or a git-ignored `.env` next to
@@ -69,13 +71,13 @@ Key facts for agents:
 
 ```text
 usage: tirai [-h] [--version]
-             {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,dbx,mcp,annotate-js}
+             {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,dbx,dbx-connect,mcp,annotate-js}
              ...
 
 Scenario-driven test evidence recorder
 
 positional arguments:
-  {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,dbx,mcp,annotate-js}
+  {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,dbx,dbx-connect,mcp,annotate-js}
     doctor              check ffmpeg, BrowserSkill, fonts and optional drivers
     setup               install ffmpeg, BrowserSkill CLI and agent skills for this OS
     init                write a scenario template
@@ -86,9 +88,9 @@ positional arguments:
     install-skill       install the tirai-evidence skill for an agent
     verify              check an evidence folder against its manifest.sha256
     from-trace          convert a `bsk record` trace into a scenario
-    capture             record a flow you click through once (bsk record) and turn it into a
-                        scenario
+    capture             record a flow you click through once and turn it into a scenario
     dbx                 start DBX web (installed by `tirai setup`, else Docker)
+    dbx-connect         create/update a DBX web connection from a DSN (no manual DBX setup)
     mcp                 run the TIRAI MCP server on stdio (for MCP-capable agents)
     annotate-js         print the path of the injectable annotate.js
 
@@ -223,8 +225,8 @@ options:
   --no-resolve          skip the replay that resolves CSS selectors
   --scope SCOPE         bsk scope for the resolving replay
 
-usage: tirai capture [-h] [--purpose PURPOSE] [--trace-dir TRACE_DIR] [-o OUTPUT] [--no-resolve]
-                     [--scope SCOPE]
+usage: tirai capture [-h] [--driver {agent-browser,bsk}] [--timeout TIMEOUT] [--purpose PURPOSE]
+                     [--trace-dir TRACE_DIR] [-o OUTPUT] [--no-resolve] [--scope SCOPE]
                      url
 
 positional arguments:
@@ -232,9 +234,12 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --driver {agent-browser,bsk}
+                        default: agent-browser when installed
+  --timeout TIMEOUT     agent-browser: stop after this many seconds
   --purpose PURPOSE     what the flow proves; becomes the scenario name
   --trace-dir TRACE_DIR
-                        where bsk writes trace.json (default: trace/)
+                        bsk: where bsk writes trace.json (default: trace/)
   -o OUTPUT, --output OUTPUT
                         scenario file to write
   --no-resolve          skip the replay that resolves CSS selectors
@@ -246,6 +251,24 @@ options:
   -h, --help    show this help message and exit
   --port PORT
   --detach, -d  run in the background (log: ~/.tirai/dbx.log)
+
+usage: tirai dbx-connect [-h] [--dsn-env DSN_ENV] --name NAME [--url URL] [--db-host DB_HOST]
+                         [--password-env PASSWORD_ENV] [--no-test]
+                         [dsn]
+
+positional arguments:
+  dsn                   postgresql://user:pw@host:port/db (prefer --dsn-env to keep it out of
+                        shell history)
+
+options:
+  -h, --help            show this help message and exit
+  --dsn-env DSN_ENV     read the DSN from this environment variable, e.g. EV_DB_DSN
+  --name NAME           connection name shown in DBX
+  --url URL             DBX web URL
+  --db-host DB_HOST     database host as DBX sees it (e.g. a Docker service name)
+  --password-env PASSWORD_ENV
+                        env var holding the DBX web password
+  --no-test             save without asking DBX to test the connection
 
 usage: tirai mcp [-h]
 
@@ -291,7 +314,7 @@ Force a method with `sh install.sh --binary|--source` (PowerShell: `./install.ps
 | ffmpeg ≥ 6.0 | kept if already new enough; otherwise a static [BtbN](https://github.com/BtbN/FFmpeg-Builds) 8.1 build (Linux, Windows) or `brew install ffmpeg` (macOS). ffmpeg 4.4 breaks agent-browser recording | `~/.tirai/bin` |
 | [agent-browser](https://github.com/vercel-labs/agent-browser) | release binary, then `agent-browser install` (Chrome for Testing; `--with-deps` on Linux) | `~/.tirai/bin` |
 | [DBX web](https://github.com/t8y2/dbx) | `browser-static` release package, SHA-256 checked (Linux x64/arm64, Windows x64); Docker image `t8y2/dbx` elsewhere | `~/.tirai/dbx` |
-| BrowserSkill CLI | official installer (only needed for `driver: bsk` and `tirai capture`) | `~/.local/bin` |
+| BrowserSkill CLI | official installer (only needed for `driver: bsk`) | `~/.local/bin` |
 
 Skip any of them with `--skip ffmpeg,agent-browser,dbx,browserskill,skills`. Then:
 
@@ -307,7 +330,7 @@ tirai dbx -d          # DBX web on http://127.0.0.1:4224; set DBX_PASSWORD for t
 | Browser | Chrome for Testing, headless (`--headed` to watch) | your real Chrome/Edge via the BrowserSkill extension |
 | Recording | 30 fps, animated cursor (`TIRAI_CURSOR=0` to hide) | ~12 fps |
 | Extension needed | no | yes |
-| `tirai capture` | no | yes |
+| `tirai capture` | yes (close the window to finish) | yes (`bsk record`) |
 
 Pick one with `driver:` in the scenario, `--driver`, or `TIRAI_DRIVER`. Both record the active tab only, so TIRAI
 records one segment per tab block and composes them.
@@ -495,7 +518,7 @@ privacy:
 ```
 
 Matches are covered with an opaque box in the page (so screenshots and video both hide them) and stay covered
-while the DOM changes. Masking is re-applied after every navigation, click and action. Set `privacy: false` on a
+while the DOM changes. With agent-browser the mask is registered as a page init script, so it is active before the page's own scripts on every load; it is also re-applied after every navigation, click and action. Set `privacy: false` on a
 tab to skip it. Limitations: text drawn on a canvas (e.g. DBX result cells) is not scanned — cover those with an
 `annotate: blur` grid target — and values in step titles, subtitles or `save`d variables are not rewritten.
 
@@ -563,6 +586,9 @@ Nothing is tied to one OS or install location. Every external tool, font and tim
 | `TIRAI_DRIVER` | `agent-browser` if installed, else `bsk` | browser driver (scenario `driver:` and `--driver` win) |
 | `TIRAI_HEADED` | off | show the agent-browser window (same as `--headed`) |
 | `TIRAI_CURSOR` | `1` | draw agent-browser's animated cursor in recordings |
+| `TIRAI_AGENT_BROWSER_VERSION` | `0.43.0` | agent-browser release `tirai setup` downloads (pinned digest only for the default) |
+| `TIRAI_DBX_VERSION` | `0.6.72` | DBX web release `tirai setup` downloads |
+| `TIRAI_ALLOW_UNVERIFIED` | unset | `1` accepts a setup download whose SHA-256 is unknown |
 | `AGENT_BROWSER_BIN` | `~/.tirai/bin`, PATH, `~/.local/bin` | agent-browser CLI |
 | `DBX_WEB_BIN`, `DBX_WEB_DIR` | `~/.tirai/dbx` | DBX web server binary / package folder |
 | `DBX_PORT`, `DBX_DATA_DIR`, `DBX_PASSWORD` | `4224`, `~/.tirai/dbx-data`, none | passed to DBX web by `tirai dbx` |
@@ -605,7 +631,15 @@ tabs:
       editor: ".cm-content"            # SQL editor element
       password: "input[type=password]" # DBX login field
       run_key: "Ctrl+Enter"            # default: Meta+Enter on macOS, Ctrl+Enter elsewhere
+      connect:                         # optional: create/update the DBX connection before the tab opens
+        name: shop-readonly            # connection name in DBX
+        database: default              # key in `databases:` whose DSN is used (default: default)
+        host: evpg                     # DB host as DBX sees it (e.g. Docker service); default: the DSN host
+        password_env: DBX_PASSWORD     # env var with the DBX web password (default: DBX_PASSWORD)
 ```
+
+`tirai dbx-connect --dsn-env EV_DB_DSN --name shop-readonly [--db-host evpg] [--url ...]` does the same from the
+command line. DBX is asked to test the connection first; use a read-only database user.
 
 ## Skill locations
 
@@ -654,7 +688,9 @@ accepts an optional `cwd`; results are the CLI output, with `isError` set when t
 tirai capture http://127.0.0.1:8080/ --purpose "Locked account is rejected" -o scenarios/locked.yaml
 ```
 
-BrowserSkill opens its Agent Window and records what you click (`bsk record`); press finish in the browser.
+A browser window opens (agent-browser); click through the flow, then close the window. Selectors come from the
+page (id, data-testid, name, aria-label, else a short path); passwords become `${ENV}` placeholders.
+`--driver bsk` uses BrowserSkill's Agent Window (`bsk record`) instead.
 TIRAI replays the trace to resolve every target to a CSS selector, splits it into steps at each click/navigation
 and derives an expectation from what changed (new URL or new text). Redacted values such as passwords become
 `${PASSWORD}`-style placeholders. Review titles and expectations, add `annotate:`, then dry-run.
@@ -745,7 +781,7 @@ tirai dbx -d            # start DBX web (http://127.0.0.1:4224) when the scenari
 ```
 
 All required checks must be `ok`. Works on macOS, Linux and Windows; follow
-[references/setup.md](references/setup.md). The default driver needs no extension; only `driver: bsk` / `tirai capture` need the user to install the BrowserSkill extension;
+[references/setup.md](references/setup.md). The default driver needs no extension; only `driver: bsk` needs the user to install the BrowserSkill extension;
 never use `sudo` without asking.
 
 ## 1. Write the scenario with the user
@@ -770,7 +806,9 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
 - Find selectors with `agent-browser open <url>` + `agent-browser snapshot` (or `bsk snapshot`) before writing them; do not guess. Or let the user click
-  the flow once: `tirai capture <url> -o <file>` writes the scenario from a `bsk record` trace.
+  the flow once: `tirai capture <url> -o <file>` opens a browser; the user clicks the flow and closes the window.
+- Database tab: `dbx.connect: {name: ..., host: ...}` on the DBX tab creates the connection from `databases.default`
+  (or run `tirai dbx-connect --dsn-env EV_DB_DSN --name <name>`); no manual DBX setup.
 - Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `save:` to reuse on-screen values as `{{name}}`.
 - Video: `zoom: <selector>` on a step, `layout: split` to show UI and DB side by side; `subtitle: {en, vi}` + `--lang`.
 - Real data on screen: add `privacy: { mask: [email, phone, card, token] }` (and `keep:` for the record under test).
@@ -832,7 +870,7 @@ It installs, with the OS package manager or official installer:
 
 Manual steps the user must do (ask them; never automate):
 
-- Only for `driver: bsk` / `tirai capture`: install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons.
+- Only for `driver: bsk`: install the **BrowserSkill** extension from the Chrome Web Store or Edge Add-ons.
 - For database tabs, start DBX web: `DBX_PASSWORD=... tirai dbx -d` (installed binary, or Docker)
   and create a connection with a **read-only** database user.
 
@@ -856,6 +894,10 @@ tabs:
     url: ${DBX_URL}
     label: "DATABASE (DBX)"
     kind: dbx          # enables the `sql:` action
+    dbx:
+      connect:         # create/update this DBX connection from databases.default before the tab opens
+        name: shop-readonly
+        host: evpg     # Postgres as DBX (in Docker) sees it
     setup:             # not recorded: login to DBX web once
       - dbx_login: "${DBX_PASSWORD}"
 

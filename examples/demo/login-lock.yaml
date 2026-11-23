@@ -10,6 +10,10 @@ tabs:
     url: ${DBX_URL}
     label: "DATABASE (DBX)"
     kind: dbx          # enables the `sql:` action
+    dbx:
+      connect:         # create/update this DBX connection from databases.default before the tab opens
+        name: shop-readonly
+        host: evpg     # Postgres as DBX (in Docker) sees it
     setup:             # not recorded: login to DBX web once
       - dbx_login: "${DBX_PASSWORD}"
 

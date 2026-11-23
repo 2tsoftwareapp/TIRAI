@@ -6,7 +6,22 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 
 ## [Unreleased]
 
+## [2.2.0]
+
 ### Added
+
+- Pinned, checksum-verified downloads in `tirai setup`: agent-browser 0.43.0 and DBX web 0.6.72 are checked against
+  built-in SHA-256 digests; the static ffmpeg 8.1 archive against its release's `checksums.sha256`.
+  `TIRAI_AGENT_BROWSER_VERSION` / `TIRAI_DBX_VERSION` pick another release (digest then read from GitHub);
+  `TIRAI_ALLOW_UNVERIFIED=1` accepts a download without a known digest.
+- `privacy:` masking is registered as an agent-browser init script, so it runs before the page's own scripts on
+  every navigation and new tab (no unmasked first frames). Only origins of tabs without `privacy: false` are masked.
+- `tirai capture` works on agent-browser (default): a visible browser records clicks, field changes and Enter with
+  stable CSS selectors; close the window to write the scenario. `--driver bsk` keeps the `bsk record` flow.
+- `tirai dbx-connect` and tab `dbx.connect:` create or update a DBX web connection from a scenario DSN, so a database
+  tab needs no manual DBX setup.
+- MCP: `driver` / `headed` on `dry_run` and `record`; new `capture` and `dbx_connect` tools.
+- Runner unit tests with a fake driver (segments per tab block, failures, saved values, privacy, DBX provisioning).
 
 - agent-browser driver (vercel-labs, Apache-2.0) behind a driver interface, now the default; BrowserSkill stays
   available via `driver: bsk`, `--driver bsk` or `TIRAI_DRIVER`. `--headed`, animated cursor in recordings.

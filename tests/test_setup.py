@@ -58,7 +58,12 @@ def test_setup_dry_run_changes_nothing(tmp_path, monkeypatch, capsys):
 
 
 def test_setup_installs_skills_only(tmp_path, capsys):
-    rc = bootstrap.run(agents=["claude", "antigravity"], project=tmp_path, yes=True, skip={"ffmpeg", "browserskill"})
+    rc = bootstrap.run(
+        agents=["claude", "antigravity"],
+        project=tmp_path,
+        yes=True,
+        skip={"ffmpeg", "agent-browser", "dbx", "browserskill"},
+    )
     assert rc == 0
     assert (tmp_path / ".claude/skills/tirai-evidence/SKILL.md").is_file()
     assert (tmp_path / ".agent/skills/tirai-evidence/SKILL.md").is_file()

@@ -21,9 +21,15 @@ def _obj(props, required=()):
 S = {"type": "string"}
 B = {"type": "boolean"}
 CWD = {"type": "string", "description": "working directory (default: the server's)"}
+DRIVER = {"type": "string", "enum": ["agent-browser", "bsk"], "description": "browser driver (default: agent-browser)"}
+HEADED = {"type": "boolean", "description": "show the agent-browser window (default: headless)"}
 
 TOOLS = {
-    "doctor": ("Check ffmpeg, BrowserSkill, fonts and optional drivers.", _obj({}), lambda a: ["doctor"]),
+    "doctor": (
+        "Check ffmpeg (>= 6), agent-browser (default driver), BrowserSkill (optional), DBX, fonts and DB drivers.",
+        _obj({}),
+        lambda a: ["doctor"],
+    ),
     "init": (
         "Write a scenario template to `path`.",
         _obj({"path": S, "force": B, "cwd": CWD}, ["path"]),
@@ -36,8 +42,8 @@ TOOLS = {
     ),
     "dry_run": (
         "Run every step without recording; reports which step/expectation fails. Always do this before record.",
-        _obj({"scenario": S, "out": S, "cwd": CWD}, ["scenario"]),
-        lambda a: ["run", a["scenario"], "--dry-run", *_out(a)],
+        _obj({"scenario": S, "out": S, "driver": DRIVER, "headed": HEADED, "cwd": CWD}, ["scenario"]),
+        lambda a: ["run", a["scenario"], "--dry-run", *_out(a), *_driver(a)],
     ),
     "record": (
         "Dry-run, record and compose the final video + reports (stops at the first failing phase).",
@@ -47,6 +53,8 @@ TOOLS = {
                 "out": S,
                 "lang": {"type": "string", "description": "subtitle language to burn in"},
                 "record_failures": {"type": "boolean", "description": "still record/compose when a step fails"},
+                "driver": DRIVER,
+                "headed": HEADED,
                 "cwd": CWD,
             },
             ["scenario"],
@@ -57,6 +65,7 @@ TOOLS = {
             *_out(a),
             *(["--lang", a["lang"]] if a.get("lang") else []),
             *(["--record-failures"] if a.get("record_failures") else []),
+            *_driver(a),
         ],
     ),
     "compose": (
@@ -74,8 +83,51 @@ TOOLS = {
         _obj({"trace": S, "output": S, "no_resolve": B, "cwd": CWD}, ["trace", "output"]),
         lambda a: ["from-trace", a["trace"], "-o", a["output"], *(["--no-resolve"] if a.get("no_resolve") else [])],
     ),
+    "capture": (
+        "Open a visible browser at `url`; the user clicks through the flow once and closes the window (or the "
+        "timeout ends it); writes a draft scenario YAML. Default driver agent-browser; bsk uses `bsk record`.",
+        _obj(
+            {"url": S, "output": S, "purpose": S, "driver": DRIVER, "timeout": {"type": "number"}, "cwd": CWD},
+            ["url", "output"],
+        ),
+        lambda a: [
+            "capture",
+            a["url"],
+            "-o",
+            a["output"],
+            *(["--purpose", a["purpose"]] if a.get("purpose") else []),
+            *(["--driver", a["driver"]] if a.get("driver") else []),
+            *(["--timeout", str(a["timeout"])] if a.get("timeout") else []),
+        ],
+    ),
+    "dbx_connect": (
+        "Create or update a DBX web connection from a DSN held in an environment variable (read-only user advised).",
+        _obj(
+            {
+                "name": S,
+                "dsn_env": {"type": "string", "description": "env var with the DSN, e.g. EV_DB_DSN"},
+                "url": {"type": "string", "description": "DBX web URL (default DBX_URL or http://127.0.0.1:4224/)"},
+                "db_host": {"type": "string", "description": "database host as DBX sees it (Docker service name)"},
+                "cwd": CWD,
+            },
+            ["name", "dsn_env"],
+        ),
+        lambda a: [
+            "dbx-connect",
+            "--dsn-env",
+            a["dsn_env"],
+            "--name",
+            a["name"],
+            *(["--url", a["url"]] if a.get("url") else []),
+            *(["--db-host", a["db_host"]] if a.get("db_host") else []),
+        ],
+    ),
     "annotate_js": ("Path of the injectable annotate.js overlay.", _obj({}), lambda a: ["annotate-js"]),
 }
+
+
+def _driver(a):
+    return [*(["--driver", a["driver"]] if a.get("driver") else []), *(["--headed"] if a.get("headed") else [])]
 
 
 def _out(a):

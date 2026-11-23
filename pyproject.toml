@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tirai"
-version = "2.1.0"
+version = "2.2.0"
 description = "Scenario-driven test evidence recorder: BrowserSkill + DBX web + on-screen annotations + ffmpeg composition, packaged as an agent skill."
 readme = "README.md"
 requires-python = ">=3.10"

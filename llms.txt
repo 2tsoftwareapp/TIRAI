@@ -26,7 +26,9 @@ Key facts for agents:
   when one exists, otherwise builds from source with Python >= 3.10, or with uv + a private Python 3.12 in `~/.tirai`
   when the machine has no suitable Python (`--binary` / `--source` force a method). It links `tirai` into
   `~/.local/bin` and runs `tirai setup` (ffmpeg >= 6.0, upgraded to a static build when older; agent-browser binary + Chrome for Testing; DBX web package or Docker image; BrowserSkill CLI; agent skills). `tirai dbx -d` starts DBX web.
-- Only `driver: bsk` and `tirai capture` need the BrowserSkill browser extension, installed by the human.
+- Only `driver: bsk` needs the BrowserSkill browser extension, installed by the human.
+- `tirai setup` downloads pinned, SHA-256-verified agent-browser, DBX web and ffmpeg builds.
+- `dbx.connect:` on a DBX tab (or `tirai dbx-connect`) creates the DBX connection from the scenario DSN.
   Never automate it. Never run `sudo` without asking; if a package install needs a password, ask the user.
 - Verify with `tirai doctor`: every required check must be `ok` before running scenarios.
 - Secrets only as `${ENV_VAR}` in scenarios; values live in the environment or a git-ignored `.env` next to
