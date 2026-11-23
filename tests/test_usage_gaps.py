@@ -247,7 +247,7 @@ def test_init_adds_gitignore_once(tmp_path, monkeypatch):
 
 
 def test_agents_skill_dir_and_mcp_flags():
-    assert str(destinations(["agents"])[0]).endswith(".agents/skills")
+    assert destinations(["agents"])[0].parts[-2:] == (".agents", "skills")
     argv = mcp.TOOLS["dry_run"][2]({"scenario": "s.yaml", "allow_writes": True, "until": "S3", "session": "k"})
     assert argv[-5:] == ["--allow-writes", "--until", "S3", "--session", "k"]
 
