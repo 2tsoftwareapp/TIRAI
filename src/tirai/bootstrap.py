@@ -273,7 +273,8 @@ class Setup:
                 if self.confirm(f"docker pull {DBX_IMAGE}"):
                     self.execute([docker, "pull", DBX_IMAGE])
             else:
-                self.problems.append("DBX: no dbx-web build for this platform; install Docker, then `tirai dbx`")
+                # Optional: only scenarios with a database tab need DBX.
+                print("  skipped: no dbx-web build for this platform; install Docker, then `tirai dbx`")
             return
         if not self.confirm(f"download DBX web ({name}) into {dbx_web_dir()}"):
             self.problems.append("DBX: not installed")
