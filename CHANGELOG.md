@@ -8,6 +8,14 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 
 ### Added
 
+- Data-driven scenarios: `include:` shared steps (`with:`, `prefix:`), `vars:`, `cases:` / `matrix:`, `once: true`,
+  `{{name}}` placeholders, `save:` action and `db.save` to pass values between steps.
+- Video: chapters in `final.mp4`, `zoom:` ease-in on a target, `layout: split` (previous step beside this one).
+- Multilingual subtitles: `subtitle: {en: ..., vi: ...}`, scenario `lang:`, `--lang`, `subtitles.<lang>.srt`.
+- `privacy:` automatic PII masking (email/phone/card/token rules, patterns, selectors, keep list).
+- `tirai capture` / `tirai from-trace`: turn a `bsk record` trace into a scenario with resolved CSS selectors.
+- `tirai mcp`: stdio MCP server exposing the CLI as tools.
+
 - Installers pick a method automatically: prebuilt `tirai-<os>-<arch>` binary from GitHub Releases
   (SHA-256 checked, no Python needed), otherwise build from source. `--binary` / `--source` /
   `TIRAI_INSTALL_MODE`, `TIRAI_VERSION`, `TIRAI_BINARY`.

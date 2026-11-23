@@ -69,12 +69,13 @@ Key facts for agents:
 
 ```text
 usage: tirai [-h] [--version]
-             {doctor,setup,init,validate,run,compose,record,install-skill,verify,annotate-js} ...
+             {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,mcp,annotate-js}
+             ...
 
 Scenario-driven test evidence recorder
 
 positional arguments:
-  {doctor,setup,init,validate,run,compose,record,install-skill,verify,annotate-js}
+  {doctor,setup,init,validate,run,compose,record,install-skill,verify,from-trace,capture,mcp,annotate-js}
     doctor              check ffmpeg, BrowserSkill, fonts and optional drivers
     setup               install ffmpeg, BrowserSkill CLI and agent skills for this OS
     init                write a scenario template
@@ -84,6 +85,10 @@ positional arguments:
     record              dry-run, record, then compose in one go
     install-skill       install the tirai-evidence skill for an agent
     verify              check an evidence folder against its manifest.sha256
+    from-trace          convert a `bsk record` trace into a scenario
+    capture             record a flow you click through once (bsk record) and turn it into a
+                        scenario
+    mcp                 run the TIRAI MCP server on stdio (for MCP-capable agents)
     annotate-js         print the path of the injectable annotate.js
 
 options:
@@ -143,7 +148,9 @@ options:
   --dry-run
   --record
 
-usage: tirai compose [-h] [--output OUTPUT] [--lead LEAD] [--title-seconds TITLE_SECONDS] timeline
+usage: tirai compose [-h] [--output OUTPUT] [--lead LEAD] [--title-seconds TITLE_SECONDS]
+                     [--lang LANG]
+                     timeline
 
 positional arguments:
   timeline
@@ -153,10 +160,11 @@ options:
   --output OUTPUT       final video path (default: <timeline dir>/final.mp4)
   --lead LEAD           seconds kept before each step starts
   --title-seconds TITLE_SECONDS
+  --lang LANG           subtitle language to burn in (from per-step subtitle maps)
 
 usage: tirai record [-h] [--env-file ENV_FILE] [--out OUT] [--session SESSION] [--scope SCOPE]
                     [--hold HOLD] [--output OUTPUT] [--lead LEAD] [--title-seconds TITLE_SECONDS]
-                    [--skip-dry-run] [--record-failures]
+                    [--lang LANG] [--skip-dry-run] [--record-failures]
                     scenario
 
 positional arguments:
@@ -172,6 +180,7 @@ options:
   --output OUTPUT       final video path (default: <timeline dir>/final.mp4)
   --lead LEAD           seconds kept before each step starts
   --title-seconds TITLE_SECONDS
+  --lang LANG           subtitle language to burn in (from per-step subtitle maps)
   --skip-dry-run
   --record-failures     record and compose even when a step fails (bug evidence)
 
@@ -189,6 +198,40 @@ usage: tirai verify [-h] [dir]
 
 positional arguments:
   dir
+
+options:
+  -h, --help  show this help message and exit
+
+usage: tirai from-trace [-h] [-o OUTPUT] [--no-resolve] [--scope SCOPE] trace
+
+positional arguments:
+  trace                 trace.json or the folder that holds it
+
+options:
+  -h, --help            show this help message and exit
+  -o OUTPUT, --output OUTPUT
+                        scenario file to write
+  --no-resolve          skip the replay that resolves CSS selectors
+  --scope SCOPE         bsk scope for the resolving replay
+
+usage: tirai capture [-h] [--purpose PURPOSE] [--trace-dir TRACE_DIR] [-o OUTPUT] [--no-resolve]
+                     [--scope SCOPE]
+                     url
+
+positional arguments:
+  url
+
+options:
+  -h, --help            show this help message and exit
+  --purpose PURPOSE     what the flow proves; becomes the scenario name
+  --trace-dir TRACE_DIR
+                        where bsk writes trace.json (default: trace/)
+  -o OUTPUT, --output OUTPUT
+                        scenario file to write
+  --no-resolve          skip the replay that resolves CSS selectors
+  --scope SCOPE         bsk scope for the resolving replay
+
+usage: tirai mcp [-h]
 
 options:
   -h, --help  show this help message and exit
@@ -295,11 +338,15 @@ steps: [...]
 | `id` | yes | Unique step id (`S1`, `S2`, ...) |
 | `tab` | yes | Tab name from `tabs:` |
 | `title` | yes | Header bar text and report row |
-| `subtitle` | no | Burned-in subtitle (defaults to `title`) |
+| `subtitle` | no | Burned-in subtitle (defaults to `title`); a `{en: ..., vi: ...}` map for several languages |
 | `actions` | no | Executed in order |
 | `expect` | yes | All must pass for the step to pass |
 | `annotate` | no | Drawn after expectations are checked |
 | `hold` | no | Seconds the step stays on screen (default 2.5 recorded, 0.3 dry-run) |
+| `zoom` | no | Selector (or `{target, factor, at}`) the video eases in on during this step |
+| `layout` | no | `split`: show the previous step (or `split_with: <id>`) beside this one |
+| `once` | no | With `cases:`/`matrix:`, run this step only for the first case |
+| `include` | — | Instead of a step: `include: file.yaml` (+ `with:` vars, `prefix:` for ids) |
 
 ## Actions
 
@@ -343,6 +390,77 @@ independently of what the DBX tab shows: DBX draws its result grid on a canvas, 
 BrowserSkill records one tab at a time (max 10 min per recording, no audio). TIRAI starts a new
 segment whenever the active tab changes, stores per-step start/end offsets in `timeline.json`, and
 `tirai compose` cuts each step out of its segment and joins them in scenario order.
+
+## Data-driven scenarios
+
+```yaml
+vars: { base: "${APP_URL}" }                  # scenario-wide values for {{name}}
+cases:                                        # or matrix: {browser: [a, b], locale: [en, vi]} (cartesian product)
+  - { name: Alice, email: alice@demo.local, status: ACTIVE }
+  - { name: Bob,   email: bob@demo.local,   status: LOCKED }
+steps:
+  - id: OPEN
+    once: true                                # first case only
+    tab: app
+    title: App is reachable
+    actions: [{ navigate: "{{base}}" }]
+    expect: [{ visible: "#email" }]
+  - include: common/login.yaml                # list of steps, or a mapping with steps:
+    with: { password_env: APP_PASSWORD }
+  - id: DB
+    tab: app
+    title: "DB status is {{status}} (screen said: {{message}})"
+    expect:
+      - db:
+          sql: "SELECT status FROM users WHERE email = '{{email}}'"
+          rows: [{ status: "{{status}}" }]
+          save: { db_status: status }         # column -> variable for later steps
+```
+
+- `{{name}}` comes from `vars:`, the current case, or a value saved earlier; `${NAME}` stays an environment variable.
+- Steps repeat once per case with ids `LOGIN-1`, `LOGIN-2`, … and titles prefixed `[Alice]`.
+- `save: { name, selector, attribute?, pattern? }` stores an element's value/text (first regex group if
+  `pattern` has one). Values saved in one action are visible to the next action or check of the same step.
+- A placeholder that is the whole value keeps its type (`equals: "{{count}}"` stays a number). An undefined
+  variable at run time is an error.
+
+## Video options
+
+| Option | Where | Effect |
+|---|---|---|
+| Chapters | automatic | `final.mp4` has one chapter per step (title card included) |
+| `zoom: "#email"` | step | eases in (≈0.6 s) on the element and holds; factor defaults to 1.8, capped so the target fits |
+| `layout: split` | step | left: last frame of the previous step (or `split_with`), right: this step; useful for UI → DB proof |
+| `--lang vi` | `tirai record` / `compose` | burns that subtitle language; every language is also written as `subtitles.<lang>.srt` |
+
+## Subtitles in several languages
+
+```yaml
+lang: en                                      # default burned language (override with --lang)
+steps:
+  - id: S2
+    subtitle:
+      en: "Step 2: malformed email -> validation error"
+      vi: "Bước 2: email sai định dạng -> báo lỗi"
+```
+
+Missing languages fall back to the first one given for that step.
+
+## Privacy: automatic PII masking
+
+```yaml
+privacy:
+  mask: [email, phone, card, token]           # built-in rules
+  patterns: ['ACC-\d{6}']                     # extra regexes (JavaScript syntax)
+  selectors: [".api-key"]                     # always covered
+  keep: ["bob@demo.local"]                    # exact strings that stay visible (e.g. the record under test)
+  inputs: true                                # also cover matching input/textarea values (default)
+```
+
+Matches are covered with an opaque box in the page (so screenshots and video both hide them) and stay covered
+while the DOM changes. Masking is re-applied after every navigation, click and action. Set `privacy: false` on a
+tab to skip it. Limitations: text drawn on a canvas (e.g. DBX result cells) is not scanned — cover those with an
+`annotate: blur` grid target — and values in step titles, subtitles or `save`d variables are not rewritten.
 
 ---
 
@@ -475,6 +593,30 @@ Also install BrowserSkill's own skill so the agent can explore pages: `bsk insta
 
 Agents without skill support can read `AGENTS.md` / `skills/tirai-evidence/SKILL.md` directly.
 
+## MCP server
+
+MCP-capable agents can call TIRAI as tools instead of the shell:
+
+```json
+{ "mcpServers": { "tirai": { "command": "tirai", "args": ["mcp"] } } }
+```
+
+Tools: `doctor`, `init`, `validate`, `dry_run`, `record`, `compose`, `verify`, `from_trace`, `annotate_js`. Each
+accepts an optional `cwd`; results are the CLI output, with `isError` set when the command fails.
+
+## Capture a flow instead of writing it
+
+```bash
+tirai capture http://127.0.0.1:8080/ --purpose "Locked account is rejected" -o scenarios/locked.yaml
+```
+
+BrowserSkill opens its Agent Window and records what you click (`bsk record`); press finish in the browser.
+TIRAI replays the trace to resolve every target to a CSS selector, splits it into steps at each click/navigation
+and derives an expectation from what changed (new URL or new text). Redacted values such as passwords become
+`${PASSWORD}`-style placeholders. Review titles and expectations, add `annotate:`, then dry-run.
+`tirai from-trace <trace dir> -o file.yaml` converts an existing trace (`--no-resolve` skips the replay and
+leaves `TODO role=… name=…` selectors).
+
 ---
 
 ## Source: docs/architecture.md
@@ -578,7 +720,11 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
 
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
-- Find selectors with `bsk open <url>` / `bsk snapshot` before writing them; do not guess.
+- Find selectors with `bsk open <url>` / `bsk snapshot` before writing them; do not guess. Or let the user click
+  the flow once: `tirai capture <url> -o <file>` writes the scenario from a `bsk record` trace.
+- Repeated flows: `include:` shared steps, `cases:`/`matrix:` for data, `save:` to reuse on-screen values as `{{name}}`.
+- Video: `zoom: <selector>` on a step, `layout: split` to show UI and DB side by side; `subtitle: {en, vi}` + `--lang`.
+- Real data on screen: add `privacy: { mask: [email, phone, card, token] }` (and `keep:` for the record under test).
 - Secrets go in `${ENV_VAR}` only. Put values in a git-ignored `.env` next to the scenario
   (loaded automatically, or pass `--env-file`); never write values into the scenario.
 - DB checks must use a **read-only** database user.
