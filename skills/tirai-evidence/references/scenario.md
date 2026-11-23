@@ -64,7 +64,7 @@ steps: [...]
 | `count` | `count: { selector: "table tbody tr", equals: 3 }` |
 | `request` | `request: { url_contains: "/api/orders", status: 201 }` (any page or XHR/fetch request seen by the page; `status` optional) |
 | `no_console_errors` | `no_console_errors: {}` or `{ ignore: ["favicon"] }` (console errors/exceptions raised during this step) |
-| `db` | `db: { sql: "SELECT status FROM users WHERE id=2", columns: [status], rows: [{status: LOCKED}] }` |
+| `db` | `db: { sql: "SELECT status FROM users WHERE id=2", rows: [{status: LOCKED}] }` (`columns:` defaults to the keys of the first expected row, in SELECT order) |
 
 DOM checks retry for up to 6 s. `db` runs read-only against `databases.<name>.dsn` (default `default`),
 independently of what the DBX tab shows: DBX draws its result grid on a canvas, so its cells are not DOM text.
@@ -116,6 +116,38 @@ steps:
 | `zoom: "#email"` | step | eases in (≈0.6 s) on the element and holds; factor defaults to 1.8, capped so the target fits |
 | `layout: split` | step | left: last frame of the previous step (or `split_with`), right: this step; useful for UI → DB proof |
 | `--lang vi` | `tirai record` / `compose` | burns that subtitle language; every language is also written as `subtitles.<lang>.srt` |
+| `zoom: follow` | step | zooms in and pans from one action target (click, fill, select…) to the next |
+| `camera: follow` | `settings:` | `zoom: follow` for every step without its own `zoom:`; `camera_factor` (default 1.6) sets the zoom |
+| `fast_forward: 4` | `settings:` | `wait`/`wait_for` longer than 1.5 s play at 4× with a "4x" badge (default 4; `0` turns it off) |
+| `--voice` | `tirai compose` | reads each subtitle aloud (macOS `say`, Windows SAPI, Linux `espeak-ng`, or `$TIRAI_TTS_CMD` with `{text}` `{out}` `{lang}`); a clip is held until its speech ends |
+
+## Desktop apps (agent-desktop)
+
+A tab with `app:` instead of `url:` drives a native app through the OS accessibility tree
+([agent-desktop](https://github.com/vercel-labs/agent-desktop): macOS AX, Windows UI Automation, Linux AT-SPI) and
+records the screen around its window with ffmpeg. Browser and desktop tabs can be mixed in one scenario.
+
+```yaml
+tabs:
+  calc: { app: gnome-calculator, label: Calculator }   # name: overrides the name used to find the app
+steps:
+  - id: S1
+    tab: calc
+    title: 7 + 8 = 15
+    actions:
+      - click: "button:7"                              # role:name (exact name) or a bare accessible name
+      - click: "button:+"
+      - click: "button:8"
+      - click: "button:="
+    expect:
+      - text_contains: { selector: { role: textfield }, text: "15" }   # mapping = agent-desktop find filters
+```
+
+Actions: `click`, `fill` (set-value, falls back to clear + type), `press`, `select`, `hover`, `scroll`, `wait`,
+`wait_for`. Expectations: `visible`, `not_visible`, `text_contains`, `text_matches`, `value`. `annotate:` and
+`privacy:` masking are browser-only (use `privacy.ocr` to scan the final video). Install with
+`tirai setup --only agent-desktop`. Needs: Linux X11 with AT-SPI (agent-desktop supports Ubuntu 24.04+) and a
+window manager; macOS Accessibility + Screen Recording permission for the terminal; Windows desktop session.
 
 ## Subtitles in several languages
 
@@ -144,4 +176,18 @@ privacy:
 Matches are covered with an opaque box in the page (so screenshots and video both hide them) and stay covered
 while the DOM changes. With agent-browser the mask is registered as a page init script, so it is active before the page's own scripts on every load; it is also re-applied after every navigation, click and action. Set `privacy: false` on a
 tab to skip it. Limitations: text drawn on a canvas (e.g. DBX result cells) is not scanned — cover those with an
-`annotate: blur` grid target — and values in step titles, subtitles or `save`d variables are not rewritten.
+`annotate: blur` grid target, or let the OCR pass below catch them — and values in step titles, subtitles or
+`save`d variables are not rewritten.
+
+### OCR pass over the final video
+
+```yaml
+privacy:
+  mask: [email, phone]
+  ocr: fix          # off (default) | warn | fix (pixelate hits and rewrite final.mp4) | fail (exit non-zero)
+```
+
+After composing, frames are sampled (1/s) and read with tesseract (`tirai setup --only ocr`), so text drawn on a
+canvas (DBX grids, images, desktop apps) is checked against the same rules; `keep:` still applies. Hits are
+reported masked with time and box. On demand: `tirai scan-pii evidence/record [--rules email phone] [--fix]`.
+OCR can misread UI text as an email-like string, so review `warn` hits before relying on them.

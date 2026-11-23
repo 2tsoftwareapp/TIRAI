@@ -74,9 +74,51 @@ TOOLS = {
         lambda a: ["compose", a["timeline"], *(["--lang", a["lang"]] if a.get("lang") else [])],
     ),
     "verify": (
-        "Check an evidence folder against its manifest.sha256.",
-        _obj({"dir": S, "cwd": CWD}, ["dir"]),
-        lambda a: ["verify", a["dir"]],
+        "Check an evidence folder against its manifest.sha256 (and its signature; `pubkey` = trusted SSH key).",
+        _obj({"dir": S, "pubkey": S, "cwd": CWD}, ["dir"]),
+        lambda a: ["verify", a["dir"], *(["--pubkey", a["pubkey"]] if a.get("pubkey") else [])],
+    ),
+    "sign": (
+        "Sign manifest.sha256 with an SSH private key (default $TIRAI_SIGN_KEY); `tsa` adds an RFC 3161 timestamp.",
+        _obj({"dir": S, "key": S, "tsa": S, "cwd": CWD}, ["dir"]),
+        lambda a: [
+            "sign",
+            a["dir"],
+            *(["--key", a["key"]] if a.get("key") else []),
+            *(["--tsa", a["tsa"]] if a.get("tsa") else []),
+        ],
+    ),
+    "export": (
+        "Write junit.xml, xray.json (Xray import) and testrail.csv (TestRail import) from an evidence folder. "
+        "Nothing is uploaded.",
+        _obj({"dir": S, "formats": {"type": "array", "items": S}, "cwd": CWD}, ["dir"]),
+        lambda a: ["export", a["dir"], *(["--format", *a["formats"]] if a.get("formats") else [])],
+    ),
+    "scan_pii": (
+        "OCR the final video for PII (email, phone, card, token), incl. text drawn on canvas; `fix` pixelates hits.",
+        _obj({"dir": S, "rules": {"type": "array", "items": S}, "fix": B, "cwd": CWD}, ["dir"]),
+        lambda a: [
+            "scan-pii",
+            a["dir"],
+            *(["--rules", *a["rules"]] if a.get("rules") else []),
+            *(["--fix"] if a.get("fix") else []),
+        ],
+    ),
+    "index": (
+        "Write one filterable HTML page listing every evidence run found under `dirs`.",
+        _obj({"dirs": {"type": "array", "items": S}, "out": S, "cwd": CWD}, ["dirs"]),
+        lambda a: ["index", *a["dirs"], *(["--out", a["out"]] if a.get("out") else [])],
+    ),
+    "from_spec": (
+        "Draft a scenario YAML from a Gherkin .feature, Markdown table or CSV of test cases; `url` resolves element "
+        "names to selectors on the live page. Review TODO(...) selectors with the user before recording.",
+        _obj({"spec": S, "output": S, "url": S, "cwd": CWD}, ["spec"]),
+        lambda a: [
+            "from-spec",
+            a["spec"],
+            *(["--output", a["output"]] if a.get("output") else []),
+            *(["--url", a["url"]] if a.get("url") else []),
+        ],
     ),
     "from_trace": (
         "Convert a `bsk record` trace (trace.json or its folder) into a scenario YAML.",

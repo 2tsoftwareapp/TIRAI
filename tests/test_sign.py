@@ -52,3 +52,16 @@ def test_unsigned_folder_fails_only_when_a_key_is_required(tmp_path):
     d = evidence(tmp_path)
     assert sign.verify_signature(d) == ([], [])
     assert sign.verify_signature(d, pubkey=str(keypair(tmp_path / "k")) + ".pub")[0]
+
+
+def test_index_flags_a_signed_folder_whose_manifest_was_regenerated(tmp_path):
+    from tirai import index
+
+    d, key = evidence(tmp_path), keypair(tmp_path / "k")
+    (d / "timeline.json").write_text('{"scenario": "s", "steps": []}')
+    report.write_manifest(d)
+    sign.sign(d, key)
+    assert index.run_info(d)["integrity"] == "intact, signed"
+    (d / "report.md").write_text("edited")
+    report.write_manifest(d)
+    assert index.run_info(d)["integrity"] == "modified (bad signature)"

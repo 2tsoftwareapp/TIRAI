@@ -15,7 +15,7 @@ from tirai.system import ffmpeg_bin, run_text, tesseract_bin
 
 PII = {
     "email": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-    "phone": r"\+?\d[\d ().-]{7,}\d",
+    "phone": r"(?<![\d+])(?!\d{4}-\d\d?-\d\d?(?!\d))\+?\d[\d ().-]{7,}\d(?!\d)",
     "card": r"\b(?:\d[ -]?){12,18}\d\b",
     "token": r"\b(?:eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]+|(?:sk|pk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{10,})\b",
 }
