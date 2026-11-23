@@ -15,7 +15,8 @@ TIRAI is an orchestration layer, not a browser or database tool:
 
 Workflow (always in this order): `tirai validate` → `tirai run --dry-run` (no video, every step must pass)
 → `tirai record` (dry-run again, record one segment per tab, compose) → hand over `evidence/record/final.mp4`
-and `report.md`.
+and `report.md` / `report.html` / `report.xlsx`, plus `manifest.sha256` (`tirai verify` detects edited evidence).
+`tirai record --record-failures` records a failing run as bug evidence.
 
 Key facts for agents:
 

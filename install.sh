@@ -28,7 +28,7 @@ REF="${TIRAI_REF:-main}"
 SOURCE="${TIRAI_SOURCE:-https://github.com/${REPO}/archive/${REF}.zip}"
 TIRAI_HOME="${TIRAI_HOME:-$HOME/.tirai}"
 BIN_DIR="${TIRAI_BIN_DIR:-$HOME/.local/bin}"
-EXTRAS="${TIRAI_EXTRAS:-postgres}"
+EXTRAS="${TIRAI_EXTRAS:-postgres,excel}"
 
 log() { printf '[tirai] %s\n' "$*"; }
 die() { printf '[tirai] ERROR: %s\n' "$*" >&2; exit 1; }

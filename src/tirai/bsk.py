@@ -33,9 +33,12 @@ class Bsk:
                 break
             err = p.stderr.strip() or p.stdout.strip()
             stale = re.search(r"session (\w+) unknown", err)
-            if not stale or attempt == len(scopes) - 1:
+            # A previous run that stopped mid-step can leave the scope bound to a changed task tab.
+            busy = "cooperation_sync_required" in err
+            if not (stale or busy) or attempt == len(scopes) - 1:
                 raise BskError(f"bsk open failed: {err}")
-            run_text([_bsk(), "close", "--session", stale.group(1), "--json"], timeout=60)
+            target = ["--session", stale.group(1)] if stale else ["--scope", sc]
+            run_text([_bsk(), "close", *target, "--json"], timeout=60)
             time.sleep(1 + attempt)
         data = json.loads(p.stdout)
         self.session = data["session_id"]

@@ -14,6 +14,15 @@ All notable changes to the TIRAI specification-to-test engine and CLI.
 - Source builds no longer require Python >= 3.10 on the machine: without it the installer downloads uv and a
   private Python 3.12 into `~/.tirai`.
 - `scripts/build_binary.py`: one-file PyInstaller build of `tirai` for the current OS/arch.
+- Scenario actions `select`, `hover`, `scroll`, `upload`, `dialog`; expectations `not_visible`, `text_matches`,
+  `value`, `attribute`, `count`, `request`, `no_console_errors`. Argument keys are validated before running.
+- `report.html` (self-contained, click a step to seek the video) and `report.xlsx` (`excel` extra) next to
+  `report.md`; `manifest.sha256` over every evidence file and `tirai verify` to detect edits.
+- `tirai record --record-failures`: records and composes a failing run as bug evidence.
+
+### Changed
+
+- DBX: reuses an open query editor instead of opening a new query tab on every run.
 
 ### Fixed
 

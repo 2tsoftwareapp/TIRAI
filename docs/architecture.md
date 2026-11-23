@@ -12,7 +12,7 @@ tirai run --record ──► bsk video per contiguous tab block ──► seg-NN
       │                                               └──► expect: db (read-only driver)
       ▼
 tirai compose ──► ffmpeg: cut steps, header bar, title card, concat, burn subtitles
-      └──► final.mp4, subtitles.srt, report.md, timeline.final.json
+      └──► final.mp4, subtitles.srt, report.md/.html/.xlsx, timeline.final.json, manifest.sha256
 ```
 
 | Component | Owner | Why |

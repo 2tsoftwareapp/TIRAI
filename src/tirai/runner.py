@@ -155,12 +155,15 @@ class Runner:
         tid = self.tabs[tab]
         cfg = self.dbx(tab)
         if tab not in self.dbx_editor_ready:
-            self.b.evaluate(
+            # Reuse an editor DBX restored from an earlier run instead of piling up new query tabs.
+            opened = self.b.evaluate(
                 tid,
-                "(()=>{const b=[...document.querySelectorAll('button')]"
+                f"(()=>{{if(document.querySelector({js(cfg['editor'])}))return false;"
+                "const b=[...document.querySelectorAll('button')]"
                 f".find(b=>b.innerText.trim()==={js(cfg['new_query'])}); b&&b.click(); return !!b}})()",
             )
-            self.pause(1.5)
+            if opened:
+                self.pause(1.5)
             self.dbx_editor_ready.add(tab)
         self.b.fill(tid, cfg["editor"], sql)
         self.pause(0.6)

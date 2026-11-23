@@ -26,7 +26,7 @@ $Ref = if ($env:TIRAI_REF) { $env:TIRAI_REF } else { 'main' }
 $Source = if ($env:TIRAI_SOURCE) { $env:TIRAI_SOURCE } else { "https://github.com/$Repo/archive/$Ref.zip" }
 $TiraiHome = if ($env:TIRAI_HOME) { $env:TIRAI_HOME } else { Join-Path $HOME '.tirai' }
 $BinDir = if ($env:TIRAI_BIN_DIR) { $env:TIRAI_BIN_DIR } else { Join-Path $HOME '.local\bin' }
-$Extras = if ($env:TIRAI_EXTRAS) { $env:TIRAI_EXTRAS } else { 'postgres' }
+$Extras = if ($env:TIRAI_EXTRAS) { $env:TIRAI_EXTRAS } else { 'postgres,excel' }
 
 function Log($m) { Write-Host "[tirai] $m" }
 function Die($m) { Write-Host "[tirai] ERROR: $m" -ForegroundColor Red; exit 1 }

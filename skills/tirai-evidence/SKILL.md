@@ -61,12 +61,13 @@ Fix the scenario (selector, wait, data) or report the product bug to the user. R
 tirai record <file>            # dry-run again, record, then compose
 ```
 
-Outputs in `evidence/record/`: `final.mp4`, `subtitles.srt`, `report.md`, `timeline.final.json`,
-per-tab `seg-*.mp4` and `step-*.png`. Re-compose without re-recording: `tirai compose evidence/record/timeline.json`.
+Outputs in `evidence/record/`: `final.mp4`, `subtitles.srt`, `report.md`, `report.html`, `report.xlsx`,
+`timeline.final.json`, `manifest.sha256`, per-tab `seg-*.mp4` and `step-*.png`. To document a bug, record the
+failing run with `tirai record <file> --record-failures` (stops after the first failing step, FAIL in the header). Re-compose without re-recording: `tirai compose evidence/record/timeline.json`.
 
 ## 4. Hand over
 
-Give the user `final.mp4` and `report.md`. Check a few frames first
+Give the user `final.mp4`, `report.html` (or `report.xlsx`) and `manifest.sha256`; `tirai verify` proves the files are unchanged. Check a few frames first
 (`ffmpeg -ss <t> -i final.mp4 -frames:v 1 frame.png`) to confirm annotations and subtitles are visible.
 
 ## Ad-hoc annotation (outside a scenario)

@@ -34,7 +34,7 @@ def main():
         py = tmp / "venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
         pip = [str(py), "-m", "pip", "install", "--quiet"]
         subprocess.run([*pip, "--upgrade", "pip"], check=True)
-        subprocess.run([*pip, f"{ROOT}[postgres,mysql]", "pyinstaller>=6"], check=True)
+        subprocess.run([*pip, f"{ROOT}[postgres,mysql,excel]", "pyinstaller>=6"], check=True)
         subprocess.run(
             [
                 str(py), "-m", "PyInstaller", "--onefile", "--name", "tirai", "--noconfirm",

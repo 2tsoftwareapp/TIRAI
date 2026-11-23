@@ -84,16 +84,29 @@ def cmd_compose(args):
 
 
 def cmd_record(args):
-    """dry-run -> record -> compose; stops at the first phase that fails."""
+    """dry-run -> record -> compose; stops at the first phase that fails unless --record-failures."""
     args.record = False
     if not args.skip_dry_run and cmd_run(args):
-        print("dry-run failed; fix the scenario before recording")
-        return 1
+        if not args.record_failures:
+            print("dry-run failed; fix the scenario before recording (or pass --record-failures for bug evidence)")
+            return 1
+        print("dry-run failed; recording anyway up to the first failing step (--record-failures)")
     args.record = True
-    if cmd_run(args):
+    failed = cmd_run(args)
+    if failed and not args.record_failures:
         return 1
     args.timeline = str(Path(args.out) / "record" / "timeline.json")
-    return cmd_compose(args)
+    return cmd_compose(args) or failed
+
+
+def cmd_verify(args):
+    from tirai import report
+
+    problems = report.verify(args.dir)
+    for p in problems:
+        print(p)
+    print("evidence intact" if not problems else f"{len(problems)} problem(s)")
+    return 1 if problems else 0
 
 
 def cmd_init(args):
@@ -185,6 +198,9 @@ def build_parser():
     run_opts(s)
     compose_opts(s)
     s.add_argument("--skip-dry-run", action="store_true")
+    s.add_argument(
+        "--record-failures", action="store_true", help="record and compose even when a step fails (bug evidence)"
+    )
     s.set_defaults(fn=cmd_record)
 
     s = sub.add_parser("install-skill", help="install the tirai-evidence skill for an agent")
@@ -193,6 +209,10 @@ def build_parser():
     s.add_argument("--dest", help="explicit skills directory (overrides --agent paths)")
     s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_install_skill)
+
+    s = sub.add_parser("verify", help="check an evidence folder against its manifest.sha256")
+    s.add_argument("dir", nargs="?", default="evidence/record")
+    s.set_defaults(fn=cmd_verify)
 
     sub.add_parser("annotate-js", help="print the path of the injectable annotate.js").set_defaults(fn=cmd_asset)
     return p
