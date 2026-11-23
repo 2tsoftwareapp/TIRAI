@@ -30,7 +30,7 @@ REQUIRED = {
     "save": ("name", "selector"),
 }
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
-SETTINGS = {"hold", "timing_scale", "expect_timeout"}
+SETTINGS = {"hold", "timing_scale", "expect_timeout", "camera", "camera_factor", "fast_forward"}
 PII_RULES = {"email", "phone", "card", "token"}
 PRIVACY_KEYS = {"mask", "patterns", "selectors", "keep", "inputs", "ocr"}
 OCR_MODES = {"off", "warn", "fix", "fail"}

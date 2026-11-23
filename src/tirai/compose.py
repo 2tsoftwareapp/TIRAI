@@ -122,11 +122,57 @@ def title_card(tmp, tl, out, seconds, frame):
     )
 
 
-def zoom_filter(step, seg_size):
+def follow_filter(z, seg_size, clip_start):
+    """Zoom in and pan from one action target to the next (`zoom: follow` / `settings.camera: follow`)."""
+    sw, sh = seg_size
+    pts = []
+    for p in z["follow"]:
+        x, y, w, h = p["rect"]
+        vw, vh = p["viewport"]
+        sx, sy = sw / max(vw, 1), sh / max(vh, 1)
+        pts.append((max(0.0, p["t"] - clip_start), (x + w / 2) * sx * 2, (y + h / 2) * sy * 2))
+    if not pts:
+        return ""
+    factor = max(1.0, float(z.get("factor", 1.6)))
+    T = f"(on/{FPS})"
+
+    def track(i):
+        # p0 + sum (p_k - p_{k-1}) * smoothstep over 0.6s starting at t_k: pans as each action happens.
+        expr = f"{pts[0][i]:.1f}"
+        for (t, *c), (_, *prev) in zip(pts[1:], pts[:-1], strict=True):
+            u = f"clip(({T}-{t - 0.3:.3f})/0.6,0,1)"
+            expr += f"+({c[i - 1] - prev[i - 1]:.1f})*{u}*{u}*(3-2*{u})"
+        return expr
+
+    u = f"clip(({T}-{max(0.0, pts[0][0] - 0.5):.3f})/0.6,0,1)"
+    zoom = f"1+{factor - 1:.3f}*{u}*{u}*(3-2*{u})"
+    return (
+        f"scale=iw*2:ih*2,zoompan=z='{zoom}':d=1:fps={FPS}:s={sw}x{sh}:"
+        f"x='clip({track(1)}-iw/zoom/2,0,iw-iw/zoom)':y='clip({track(2)}-ih/zoom/2,0,ih-ih/zoom)',"
+    )
+
+
+def warp(idle, clip_start):
+    """Time-warp for fast-forwarded waits: (setpts filter, new duration delta, [(a', b', speed)])."""
+    spans = [(max(0.0, a - clip_start), max(0.0, b - clip_start), s) for a, b, s in idle or [] if b > a]
+    if not spans:
+        return "", 0.0, []
+    terms = [f"{1 - 1 / s:.4f}*clip(T-{a:.3f},0,{b - a:.3f})" for a, b, s in spans]
+    saved = sum((1 - 1 / s) * (b - a) for a, b, s in spans)
+    shown, cut = [], 0.0
+    for a, b, s in spans:
+        shown.append((a - cut, a - cut + (b - a) / s, s))
+        cut += (1 - 1 / s) * (b - a)
+    return f"setpts='(T-({'+'.join(terms)}))/TB',fps={FPS},", saved, shown
+
+
+def zoom_filter(step, seg_size, clip_start=0.0):
     """Ease into the step's `zoom` target (rect captured by the runner) and hold; '' when not zoomed."""
     z = step.get("zoom")
     if not z:
         return ""
+    if z.get("follow"):
+        return follow_filter(z, seg_size, clip_start)
     sw, sh = seg_size
     x, y, w, h = z["rect"]
     vw, vh = z["viewport"]
@@ -157,10 +203,18 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
     st = text_file(tmp, f"st-{step['id']}.txt", status)
     st_color = "0x16a34a" if status == "PASS" else "0xdc2626"
     bold = "font-bold.ttf"
+    ff_filter, saved, shown = warp(step.get("idle"), start)
+    badges = "".join(
+        f"drawtext=fontfile={bold}:text='{s:g}x':fontsize=22:fontcolor=white:box=1:boxcolor=0x0f172acc:boxborderw=8:"
+        f"x=w-text_w-24:y=24:enable='between(t,{a:.2f},{b:.2f})',"
+        for a, b, s in shown
+    )
     cut = (
         f"fps={FPS},tpad=stop_mode=clone:stop_duration=10,"
-        f"trim=start={start:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,{zoom_filter(step, video_size(seg))}"
+        f"trim=start={start:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,"
+        f"{zoom_filter(step, video_size(seg), start)}{ff_filter}{badges}"
     )
+    dur -= saved
     chrome = (
         f"pad={W}:{H + TOP}:0:{TOP}:color={color},pad={W}:{FH}:0:0:color=0x0f172a,"
         f"drawtext=fontfile={bold}:textfile={hdr}:fontsize=20:fontcolor=white:x=16:y=10,"

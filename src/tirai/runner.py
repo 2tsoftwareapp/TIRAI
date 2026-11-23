@@ -106,7 +106,7 @@ class Runner:
             href = self.b.evaluate(self.tabs[name], "location.href") or ""
         except DriverError:
             return
-        if href.startswith(("chrome-error:", "about:neterror")):
+        if isinstance(href, str) and href.startswith(("chrome-error:", "about:neterror")):
             raise RuntimeError(f"tab {name}: {url} did not load (is the server running?)")
 
     # ---------- recording ----------
@@ -216,6 +216,39 @@ class Runner:
             value = m.group(1) if m.groups() else m.group(0)
         self.vars[arg["name"]] = value
         self.saved[arg["name"]] = value
+
+    @property
+    def camera(self):
+        return (self.sc.get("settings") or {}).get("camera")
+
+    @property
+    def camera_factor(self):
+        return float((self.sc.get("settings") or {}).get("camera_factor", 1.6))
+
+    def tracked_action(self, tab, action, rec, follow):
+        """Run an action; when recording, note where it happened (camera follow) and long waits (fast-forward)."""
+        ((kind, arg),) = action.items()
+        t0 = self.now()
+        if t0 is not None and follow:
+            target = arg.get("selector") if isinstance(arg, dict) else arg
+            if kind in ("fill", "click", "select", "hover", "scroll", "upload", "press") and isinstance(target, str):
+                rect = self.target_rect(tab, target)
+                if rect:
+                    rec.setdefault("camera", []).append({"t": t0, "rect": rect[:4], "viewport": rect[4:]})
+        self.do_action(tab, action)
+        speed = float((self.sc.get("settings") or {}).get("fast_forward", 4))
+        if t0 is not None and kind in ("wait", "wait_for") and speed > 1 and (t1 := self.now()) - t0 >= 1.5:
+            rec.setdefault("idle", []).append([round(t0 + 0.3, 3), round(t1 - 0.2, 3), speed])
+
+    def target_rect(self, tab, selector):
+        try:
+            return self.b.evaluate(
+                self.tabs[tab],
+                f"(()=>{{const e=document.querySelector({js(selector)});if(!e)return null;"
+                "const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height,innerWidth,innerHeight]})()",
+            )
+        except DriverError:
+            return None
 
     def zoom_rect(self, tab, zoom):
         """Viewport rect of the zoom target, consumed by `tirai compose` to ease in on it."""
@@ -448,13 +481,16 @@ class Runner:
                 if any("no_console_errors" in e for e in step.get("expect", [])):
                     self.console_since[tab] = self.console_cursor(tab)
                 self.apply_privacy(tab)
+                follow = step.get("zoom") == "follow" or (not step.get("zoom") and self.camera == "follow")
                 for action in step.get("actions", []):
-                    self.do_action(tab, render(action, self.vars, strict=True))
+                    self.tracked_action(tab, render(action, self.vars, strict=True), rec, follow)
                     self.apply_privacy(tab)
                 for exp in step.get("expect", []):
                     rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
                 rec["status"] = "passed" if all(c["ok"] for c in rec["checks"]) else "failed"
-                if step.get("zoom"):
+                if follow and rec.get("camera"):
+                    rec["zoom"] = {"follow": rec.pop("camera"), **({"factor": self.camera_factor})}
+                elif step.get("zoom") and step["zoom"] != "follow":
                     rec["zoom"] = self.zoom_rect(tab, render(step["zoom"], self.vars, strict=True))
                 if step.get("annotate"):
                     rec["annotations"] = self.annotate(tab, render(step["annotate"], self.vars, strict=True))
