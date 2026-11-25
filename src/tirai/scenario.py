@@ -35,7 +35,7 @@ REQUIRED = {
     "xlsx": ("path",),
     "image": ("path",),
 }
-PREVIEW_COMMON_KEYS = {"annotate", "preview", "zoom", "spotlight", "hold", "title", "subtitle"}
+PREVIEW_COMMON_KEYS = {"annotate", "preview", "zoom", "spotlight", "hold", "title", "subtitle", "label"}
 PDF_KEYS = {"path", "pages", "contains", *PREVIEW_COMMON_KEYS}
 XLSX_KEYS = {"path", "sheets", "contains", "sheet", "max_rows", "max_cols", *PREVIEW_COMMON_KEYS}
 IMAGE_KEYS = {"path", "contains", *PREVIEW_COMMON_KEYS}
@@ -45,19 +45,22 @@ SETTINGS = {
     "hold", "timing_scale", "expect_timeout", "camera", "camera_factor", "fast_forward",
     "viewport", "auto_scroll", "strict_network", "ignore_requests", "trim_still",
     "single_tab", "pace", "action_delay", "typing_delay", "cursor_glide", "spotlight", "theme",
+    "action_annotate", "action_zoom", "action_hold", "show_expects", "expect_pos",
 }  # fmt: skip
 PACE_MODES = {"fast", "human", "slow"}
-CAMERA_MODES = {"follow", "annotate"}
+CAMERA_MODES = {"follow", "annotate", "action"}
+EXPECT_POS_MODES = {"top-right", "top-left", "bottom-right", "bottom-left"}
 THEME_KEYS = {
     "font", "header_size", "header_height", "subtitle_size", "subtitle_height",
     "subtitle_bg", "subtitle_color", "tab_colors", "pass_color", "fail_color",
     "accent", "cursor_color", "ripple_color", "spotlight_opacity", "label_font",
 }  # fmt: skip
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-DB_KEYS = {"database", "sql", "rows", "columns", "save"}
+DB_KEYS = {"database", "sql", "rows", "columns", "save", "label"}
 STEP_KEYS = {
     "id", "tab", "title", "subtitle", "actions", "expect", "annotate", "hold", "zoom", "spotlight",
     "layout", "split_with", "once", "case", "save", "writes", "for_each", "as",
+    "action_annotate", "show_expects",
 }  # fmt: skip
 # Playwright-only selector syntax: agent-browser/bsk take CSS, so these never match.
 PLAYWRIGHT_RE = re.compile(
@@ -324,6 +327,12 @@ def _check_args(kind, arg, where, errors):
             if sub:
                 _check_args(sub, e[sub], f"{where}.expect[{j}]", errors)
         return
+    if kind in ("click", "clear", "hover", "scroll", "visible", "not_visible") and isinstance(arg, dict):
+        if "selector" not in arg:
+            errors.append(f"{where}: {kind} mapping is missing selector")
+    if kind == "url_contains" and isinstance(arg, dict):
+        if "text" not in arg:
+            errors.append(f"{where}: url_contains mapping is missing text")
     if kind == "wait_for" and isinstance(arg, dict):
         if not (arg.get("selector") or arg.get("idle")):
             errors.append(f"{where}: wait_for needs a selector or idle: true")
@@ -492,6 +501,18 @@ def validate(sc) -> list[str]:
         errors.append("settings.spotlight: must be true or false")
     if settings.get("cursor_glide") is not None and not isinstance(settings["cursor_glide"], bool):
         errors.append("settings.cursor_glide: must be true or false")
+    if settings.get("action_annotate") is not None and not isinstance(settings["action_annotate"], bool):
+        errors.append("settings.action_annotate: must be true or false")
+    az = settings.get("action_zoom")
+    if az is not None and not (isinstance(az, bool) or (isinstance(az, int | float) and az >= 1.0)):
+        errors.append("settings.action_zoom: must be true, false, or a zoom factor >= 1.0")
+    ah = settings.get("action_hold")
+    if ah is not None and (isinstance(ah, bool) or not isinstance(ah, int | float) or ah < 0):
+        errors.append("settings.action_hold: must be a non-negative number of seconds")
+    if settings.get("show_expects") is not None and not isinstance(settings["show_expects"], bool):
+        errors.append("settings.show_expects: must be true or false")
+    if settings.get("expect_pos") is not None and settings["expect_pos"] not in EXPECT_POS_MODES:
+        errors.append(f"settings.expect_pos: must be one of {', '.join(sorted(EXPECT_POS_MODES))}")
     _check_theme(sc.get("theme"), "theme", errors)
     _check_theme(settings.get("theme"), "settings.theme", errors)
     _check_privacy(sc.get("privacy"), errors)
@@ -574,11 +595,17 @@ def validate(sc) -> list[str]:
         zoom = st.get("zoom")
         if zoom is not None and not (
             isinstance(zoom, str)
-            or (isinstance(zoom, dict) and ("target" in zoom or zoom.get("mode") in ("annotate", "follow")))
+            or (isinstance(zoom, dict) and ("target" in zoom or zoom.get("mode") in ("annotate", "follow", "action")))
         ):
-            errors.append(f"{where}: zoom needs a selector, 'annotate'/'follow', or a mapping with target/mode")
+            errors.append(
+                f"{where}: zoom needs a selector, 'annotate'/'follow'/'action', or a mapping with target/mode"
+            )
         if st.get("spotlight") is not None and not isinstance(st["spotlight"], bool):
             errors.append(f"{where}: spotlight must be true or false")
+        if st.get("action_annotate") is not None and not isinstance(st["action_annotate"], bool):
+            errors.append(f"{where}: action_annotate must be true or false")
+        if st.get("show_expects") is not None and not isinstance(st["show_expects"], bool):
+            errors.append(f"{where}: show_expects must be true or false")
         if st.get("layout") not in (None, "split"):
             errors.append(f"{where}: layout must be split")
         for j, a in enumerate(st.get("annotate", []) or []):

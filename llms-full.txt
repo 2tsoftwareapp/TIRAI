@@ -523,8 +523,9 @@ steps: [...]
 | `expect` | yes | All must pass for the step to pass (optional when an action is an inline `expect:`) |
 | `annotate` | no | Drawn after expectations are checked |
 | `hold` | no | Seconds the step stays on screen (default 2.5 recorded, 0.3 dry-run) |
-| `zoom` | no | Selector (or `{target, factor, at}`) the video eases in on during this step |
-| `layout` | no | `split`: show the previous step (or `split_with: <id>`) beside this one |
+| `zoom` | no | Selector, `'action'`, `'annotate'`, `'follow'`, or `{target/mode, factor, at, out}` |
+| `action_annotate` | no | `true`/`false`: override `settings.action_annotate` for this step |
+| `show_expects` | no | `true`/`false`: override `settings.show_expects` for this step |
 | `once` | no | With `cases:`/`matrix:`, run this step only for the first case (`once: last`: only after the last case) |
 | `for_each` | no | Repeat this step once per item of a list (or the name of a list in `vars:`/the case); see [Loops](#loops-and-steps-that-run-once) |
 | `save` | no | `{ name, selector, attribute?, pattern? }` (or a list): store a value after the actions, before `expect` |
@@ -593,8 +594,8 @@ stable ids/names, skips ids that look generated, and leaves out elements with no
 | Action | Example |
 |---|---|
 | `navigate` | `navigate: ${APP_URL}` |
-| `fill` | `fill: { selector: "#email", value: "a@b.c" }` |
-| `click` | `click: "button[type=submit]"` |
+| `fill` | `fill: { selector: "#email", value: "a@b.c", label: "Enter email" }` (optional `label`, `annotate`, `zoom`, `color`) |
+| `click` | `click: "button[type=submit]"` or `click: { selector: "@save", label: "Click Save", zoom: 1.8 }` |
 | `press` | `press: Enter` or `press: { key: "Ctrl+Enter", selector: ".cm-content" }` |
 | `wait` | `wait: 500` (ms) |
 | `wait_for` | `wait_for: "#welcome"`, `wait_for: { selector: "#menu [role=treeitem]", timeout: 15000 }`, or `wait_for: { idle: true, timeout: 15000 }` (document loaded and no new request for 1 s; warns and continues on timeout) |
@@ -622,11 +623,11 @@ match in page order, not list order; `validate` warns and suggests `targets:` fa
 
 | Expect | Example |
 |---|---|
-| `visible` | `visible: "#email"` |
-| `text_contains` | `text_contains: { selector: ".error", text: "locked" }` (no selector = whole page) |
-| `not_visible` | `not_visible: "#login-error"` (missing, zero-size, `display:none` or `visibility:hidden`) |
+| `visible` | `visible: "#email"` or `visible: { selector: "@email", label: "Email field visible" }` |
+| `text_contains` | `text_contains: { selector: ".error", text: "locked", label: "Error text shown" }` (no selector = whole page) |
+| `not_visible` | `not_visible: "#login-error"` or `not_visible: { selector: "#login-error", label: "No error banner" }` (missing, zero-size, `display:none` or `visibility:hidden`) |
 | `text_matches` | `text_matches: { selector: "#total", pattern: "^\\d+ items$", flags: i }` (JavaScript RegExp, like `save.pattern`) |
-| `url_contains` | `url_contains: "/dashboard"` |
+| `url_contains` | `url_contains: "/dashboard"` or `url_contains: { text: "/dashboard", label: "Navigated to dashboard" }` |
 | `value` | `value: { selector: "#email", equals: "a@b.c" }` (form field value) |
 | `attribute` | `attribute: { selector: "#save", name: disabled, equals: "" }` |
 | `count` | `count: { selector: "table tbody tr", equals: 3 }` |
@@ -771,10 +772,13 @@ steps:
 | Chapters | automatic | `final.mp4` has one chapter per step (title card included) |
 | `zoom: "#email"` | step | eases in (≈0.6 s) on the element and holds; add `out: true` in `{ target, factor, at, out }` to ease back out |
 | `zoom: annotate` / `camera: annotate` | step / `settings:` | automatically zooms in on the `annotate:` union box + labels, holds, and eases back out smoothly |
+| `zoom: action` / `camera: action` | step / `settings:` | zooms in and pans across every interactive action target, then eases smoothly back out to full view when `expect:` / results appear (falls back to `annotate:` zoom on steps without UI actions) |
+| `action_annotate: true` | step / `settings:` | draws a live callout pill + highlight box on every interactive action (`click`, `fill`, `clear`, `select`, `press`, `download`, `upload`, `hover`); customize per action with `label:`, `annotate: false`, `zoom: 1.8`, `color:` |
+| `action_zoom: true` / `1.65` | `settings:` | enables action-by-action zoom (optionally setting the zoom factor); `action_hold` (default `0.35` s) sets the brief callout dwell |
+| `show_expects: true` | step / `settings:` | renders a live **EXPECTATIONS** checklist HUD card (`✓` PASS / `✗` FAIL + actual value on failure) ticking off each `expect:` one by one and boxing checked DOM targets; position with `expect_pos: top-right \| top-left \| bottom-right \| bottom-left` |
 | `spotlight: true` | step / `settings:` | dims the page around active `annotate:` targets (and on annotated PDF/Excel/image previews) |
 | `pace: human` (`slow`) | `settings:` | when recording, glides a 60fps virtual cursor with click ripples, types ASCII fields progressively, and adds brief natural pauses (dry-run stays full speed) |
 | `theme:` | top-level / `settings:` | customize `font`, `header_size`, `subtitle_size`, `subtitle_height`, `subtitle_bg`, `subtitle_color`, `tab_colors`, `pass_color`, `fail_color`, `accent`, `cursor_color`, `ripple_color`, `spotlight_opacity` |
-| `layout: split` | step | left: last frame of the previous step (or `split_with`), right: this step; useful for UI → DB proof |
 | `--lang vi` | `tirai record` / `compose` | burns that subtitle language; every language is also written as `subtitles.<lang>.srt` |
 | `zoom: follow` | step | zooms in and pans from one action target (click, fill, select…) to the next |
 | `camera: follow` | `settings:` | `zoom: follow` for every step without its own `zoom:`; `camera_factor` (default 1.6) sets the zoom |
@@ -1126,25 +1130,48 @@ All required checks must be `ok`. Works on macOS, Linux and Windows; follow
 [references/setup.md](references/setup.md). The default driver needs no extension; only `driver: bsk` needs the user to install the BrowserSkill extension;
 never use `sudo` without asking.
 
-## 1. Write the scenario with the user
+## 1. Write the scenario with the user (Step-by-Step Evidence Methodology)
 
-Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thing to prove:
+Start from `tirai init scenarios/<name>.yaml` and fill it in. Follow the **step-by-step action + per-expect evidence standard**:
+
+1. **Always turn on step-by-step visual narration in `settings:`** so the viewer sees *every* click, edit, keypress, and verification live:
+   - `pace: human` — smooth 60fps virtual cursor glide, click ripples, and progressive typing.
+   - `camera: action` — automatically zooms in and pans smoothly from each action target (`click`, `fill`, `clear`, `select`, `press`, `download`) to the next, then eases back out to full view when expectations & results appear (pure verification/DB steps with `annotate:` still zoom into their annotations).
+   - `action_annotate: true` — draws a live callout pill + highlight box on **every** interactive action so the viewer knows exactly what is being clicked, cleared, typed, or submitted.
+   - `show_expects: true` — renders a live **EXPECTATIONS** checklist HUD card in the corner (`✓` PASS / `✗` FAIL + actual value on failure) and highlights each checked DOM target in green/red as each `expect:` runs one by one.
+   - `spotlight: true` — subtly dims the surrounding page during callouts and final annotations.
+2. **Write short, explicit `label:` on key actions and every `expect:`** (in the user's language, e.g. Vietnamese/Japanese/English) so the callout pills and per-expect checklist read like a real QA walkthrough rather than raw CSS selectors.
+3. **One step = one logical milestone** with explicit `expect:` checks AND final `annotate:` callouts on the resulting UI/DB/PDF/Excel state:
 
 ```yaml
-- id: S2
-  tab: app                       # which browser tab (declared under tabs:)
-  title: Invalid email format
-  subtitle: "Step 2: enter a malformed email -> validation error"
-  actions:                       # what to do
-    - fill: { selector: "#email", value: "alice-at-demo.local" }
-    - click: "button[type=submit]"
-  expect:                        # what must be true (required)
-    - text_contains: { selector: ".error", text: "Email format is invalid." }
-  annotate:                      # what to draw once expectations are checked
-    - box: { target: "#email" }
-    - arrow: { target: ".error", from: right, label: "Validation error" }
+settings:
+  pace: human
+  camera: action
+  camera_factor: 1.65
+  action_annotate: true
+  show_expects: true
+  spotlight: true
+  viewport: { width: 1600, height: 900 }
+
+steps:
+  - id: S2
+    tab: app                       # which browser tab (declared under tabs:)
+    title: Invalid email format
+    subtitle: "Step 2: enter a malformed email -> validation error"
+    actions:                       # each action gets live callout + smooth zoom
+      - clear: { selector: "@email", label: "Clear old email" }
+      - fill: { selector: "@email", value: "alice-at-demo.local", label: "Type invalid email" }
+      - click: { selector: "@submit", label: "Click Submit" }
+    expect:                        # each expect ticks off live in the EXPECTATIONS HUD
+      - text_contains: { selector: "@error", text: "Email format is invalid.", label: "Validation error shown" }
+      - attribute: { selector: "@email", name: "aria-invalid", equals: "true", label: "Email marked invalid" }
+    annotate:                      # final result callouts (HUD stays visible alongside them)
+      - box: { target: "@email", label: "Invalid input" }
+      - arrow: { target: "@error", from: right, label: "Error message" }
 ```
 
+- Override per action when needed: `{ selector: "@x", label: "...", annotate: false, zoom: 1.8 }` (or `zoom: false` to skip zooming on a minor action).
+- Override per step when needed: `action_annotate: false` or `show_expects: false` on dense setup/login steps.
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
 - Name elements once under `targets:` and use `@name` in actions/expect/annotate/zoom (fallback locators like
@@ -1167,7 +1194,7 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
   `settings.viewport: {width: 1600, height: 900}` when forms do not fit.
 - Selectors are CSS or TIRAI locators; Playwright syntax (`:has-text`, `>>`) does not work. Quote values that start
   with `${...}` or `{{...}}` inside `{ }`.
-- Video: `zoom: <selector>` on a step, `layout: split` to show UI and DB side by side; `subtitle: {en, vi}` + `--lang`.
+- Video: `camera: action` (or `zoom: <selector>` / `zoom: annotate`) on steps; `subtitle: {en, vi}` + `--lang`. **Do NOT use `layout: split`** (side-by-side UI + DB shrinks both panes and makes text unreadable; always record UI and DBX as separate full-screen steps with zoom + annotations).
 - Real data on screen: add `privacy: { mask: [email, phone, card, token] }` (and `keep:` for the record under test).
 - Secrets go in `${ENV_VAR}` only. Put values in a git-ignored `.env` next to the scenario
   (loaded automatically, or pass `--env-file`); never write values into the scenario.

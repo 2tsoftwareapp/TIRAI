@@ -27,8 +27,9 @@ steps: [...]
 | `expect` | yes | All must pass for the step to pass (optional when an action is an inline `expect:`) |
 | `annotate` | no | Drawn after expectations are checked |
 | `hold` | no | Seconds the step stays on screen (default 2.5 recorded, 0.3 dry-run) |
-| `zoom` | no | Selector (or `{target, factor, at}`) the video eases in on during this step |
-| `layout` | no | `split`: show the previous step (or `split_with: <id>`) beside this one |
+| `zoom` | no | Selector, `'action'`, `'annotate'`, `'follow'`, or `{target/mode, factor, at, out}` |
+| `action_annotate` | no | `true`/`false`: override `settings.action_annotate` for this step |
+| `show_expects` | no | `true`/`false`: override `settings.show_expects` for this step |
 | `once` | no | With `cases:`/`matrix:`, run this step only for the first case (`once: last`: only after the last case) |
 | `for_each` | no | Repeat this step once per item of a list (or the name of a list in `vars:`/the case); see [Loops](#loops-and-steps-that-run-once) |
 | `save` | no | `{ name, selector, attribute?, pattern? }` (or a list): store a value after the actions, before `expect` |
@@ -97,8 +98,8 @@ stable ids/names, skips ids that look generated, and leaves out elements with no
 | Action | Example |
 |---|---|
 | `navigate` | `navigate: ${APP_URL}` |
-| `fill` | `fill: { selector: "#email", value: "a@b.c" }` |
-| `click` | `click: "button[type=submit]"` |
+| `fill` | `fill: { selector: "#email", value: "a@b.c", label: "Enter email" }` (optional `label`, `annotate`, `zoom`, `color`) |
+| `click` | `click: "button[type=submit]"` or `click: { selector: "@save", label: "Click Save", zoom: 1.8 }` |
 | `press` | `press: Enter` or `press: { key: "Ctrl+Enter", selector: ".cm-content" }` |
 | `wait` | `wait: 500` (ms) |
 | `wait_for` | `wait_for: "#welcome"`, `wait_for: { selector: "#menu [role=treeitem]", timeout: 15000 }`, or `wait_for: { idle: true, timeout: 15000 }` (document loaded and no new request for 1 s; warns and continues on timeout) |
@@ -126,11 +127,11 @@ match in page order, not list order; `validate` warns and suggests `targets:` fa
 
 | Expect | Example |
 |---|---|
-| `visible` | `visible: "#email"` |
-| `text_contains` | `text_contains: { selector: ".error", text: "locked" }` (no selector = whole page) |
-| `not_visible` | `not_visible: "#login-error"` (missing, zero-size, `display:none` or `visibility:hidden`) |
+| `visible` | `visible: "#email"` or `visible: { selector: "@email", label: "Email field visible" }` |
+| `text_contains` | `text_contains: { selector: ".error", text: "locked", label: "Error text shown" }` (no selector = whole page) |
+| `not_visible` | `not_visible: "#login-error"` or `not_visible: { selector: "#login-error", label: "No error banner" }` (missing, zero-size, `display:none` or `visibility:hidden`) |
 | `text_matches` | `text_matches: { selector: "#total", pattern: "^\\d+ items$", flags: i }` (JavaScript RegExp, like `save.pattern`) |
-| `url_contains` | `url_contains: "/dashboard"` |
+| `url_contains` | `url_contains: "/dashboard"` or `url_contains: { text: "/dashboard", label: "Navigated to dashboard" }` |
 | `value` | `value: { selector: "#email", equals: "a@b.c" }` (form field value) |
 | `attribute` | `attribute: { selector: "#save", name: disabled, equals: "" }` |
 | `count` | `count: { selector: "table tbody tr", equals: 3 }` |
@@ -275,10 +276,13 @@ steps:
 | Chapters | automatic | `final.mp4` has one chapter per step (title card included) |
 | `zoom: "#email"` | step | eases in (≈0.6 s) on the element and holds; add `out: true` in `{ target, factor, at, out }` to ease back out |
 | `zoom: annotate` / `camera: annotate` | step / `settings:` | automatically zooms in on the `annotate:` union box + labels, holds, and eases back out smoothly |
+| `zoom: action` / `camera: action` | step / `settings:` | zooms in and pans across every interactive action target, then eases smoothly back out to full view when `expect:` / results appear (falls back to `annotate:` zoom on steps without UI actions) |
+| `action_annotate: true` | step / `settings:` | draws a live callout pill + highlight box on every interactive action (`click`, `fill`, `clear`, `select`, `press`, `download`, `upload`, `hover`); customize per action with `label:`, `annotate: false`, `zoom: 1.8`, `color:` |
+| `action_zoom: true` / `1.65` | `settings:` | enables action-by-action zoom (optionally setting the zoom factor); `action_hold` (default `0.35` s) sets the brief callout dwell |
+| `show_expects: true` | step / `settings:` | renders a live **EXPECTATIONS** checklist HUD card (`✓` PASS / `✗` FAIL + actual value on failure) ticking off each `expect:` one by one and boxing checked DOM targets; position with `expect_pos: top-right \| top-left \| bottom-right \| bottom-left` |
 | `spotlight: true` | step / `settings:` | dims the page around active `annotate:` targets (and on annotated PDF/Excel/image previews) |
 | `pace: human` (`slow`) | `settings:` | when recording, glides a 60fps virtual cursor with click ripples, types ASCII fields progressively, and adds brief natural pauses (dry-run stays full speed) |
 | `theme:` | top-level / `settings:` | customize `font`, `header_size`, `subtitle_size`, `subtitle_height`, `subtitle_bg`, `subtitle_color`, `tab_colors`, `pass_color`, `fail_color`, `accent`, `cursor_color`, `ripple_color`, `spotlight_opacity` |
-| `layout: split` | step | left: last frame of the previous step (or `split_with`), right: this step; useful for UI → DB proof |
 | `--lang vi` | `tirai record` / `compose` | burns that subtitle language; every language is also written as `subtitles.<lang>.srt` |
 | `zoom: follow` | step | zooms in and pans from one action target (click, fill, select…) to the next |
 | `camera: follow` | `settings:` | `zoom: follow` for every step without its own `zoom:`; `camera_factor` (default 1.6) sets the zoom |

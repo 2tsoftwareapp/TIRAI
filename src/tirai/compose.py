@@ -247,8 +247,8 @@ def title_card(tmp, out, seconds, frame, tl=None):
     )
 
 
-def follow_filter(z, seg_size, clip_start):
-    """Zoom in and pan from one action target to the next (`zoom: follow` / `settings.camera: follow`)."""
+def follow_filter(z, seg_size, clip_start, clip_dur=None):
+    """Zoom in and pan from one action target to the next (`zoom: follow`/`action`), with optional smooth zoom-out."""
     sw, sh = seg_size
     pts = []
     for p in z["follow"]:
@@ -269,8 +269,25 @@ def follow_filter(z, seg_size, clip_start):
             expr += f"+({c[i - 1] - prev[i - 1]:.1f})*{u}*{u}*(3-2*{u})"
         return expr
 
-    u = f"clip(({T}-{max(0.0, pts[0][0] - 0.5):.3f})/0.6,0,1)"
-    zoom = f"1+{factor - 1:.3f}*{u}*{u}*(3-2*{u})"
+    in_at = max(0.0, pts[0][0] - 0.5)
+    u = f"clip(({T}-{in_at:.3f})/0.6,0,1)"
+    ease_in = f"({u}*{u}*(3-2*{u}))"
+    if z.get("out"):
+        out_s = max(0.15, float(z.get("out_duration", 0.55)))
+        if z.get("out_at") is not None:
+            out_at = max(in_at + 0.65, float(z["out_at"]) - clip_start)
+        elif clip_dur is not None:
+            out_at = max(in_at + 0.65, clip_dur - out_s - 0.15)
+        else:
+            out_at = None
+        if out_at is not None and (clip_dur is None or out_at < clip_dur - 0.05):
+            u_out = f"clip(({T}-{out_at:.3f})/{out_s:.3f},0,1)"
+            ease = f"({ease_in}*(1-{u_out}*{u_out}*(3-2*{u_out})))"
+        else:
+            ease = ease_in
+    else:
+        ease = ease_in
+    zoom = f"1+{factor - 1:.3f}*{ease}"
     return (
         f"scale=iw*2:ih*2,zoompan=z='{zoom}':d=1:fps={FPS}:s={sw}x{sh}:"
         f"x='clip({track(1)}-iw/zoom/2,0,iw-iw/zoom)':y='clip({track(2)}-ih/zoom/2,0,ih-ih/zoom)',"
@@ -335,7 +352,7 @@ def zoom_filter(step, seg_size, clip_start=0.0, clip_dur=None):
     if not z:
         return ""
     if z.get("follow"):
-        return follow_filter(z, seg_size, clip_start)
+        return follow_filter(z, seg_size, clip_start, clip_dur=clip_dur)
     sw, sh = seg_size
     x, y, w, h = z["rect"]
     vw, vh = z["viewport"]
@@ -401,10 +418,7 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
     )
 
     def fit(w, h):
-        return (
-            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color={bg},setsar=1"
-        )
+        return f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color={bg},setsar=1"
 
     if split_image:
         # Left: the last frame of the step being proven; right: this step (e.g. the DB query).
@@ -483,7 +497,15 @@ def pdf_page_ass(tmpd, d, i, n, W, H, tl=None, duration=4.0, header=None, subtit
     styles = [
         _ass_style("Pdf", font, hdr_fs, -1, 0, 7, max(2, round(20 * k)), max(10, round(110 * k)), hdr_mv),
         _ass_style(
-            "Sub", font, sub_fs, 0, 0.5, 2, max(6, round(24 * k)), max(6, round(24 * k)), sub_mv,
+            "Sub",
+            font,
+            sub_fs,
+            0,
+            0.5,
+            2,
+            max(6, round(24 * k)),
+            max(6, round(24 * k)),
+            sub_mv,
             _hex_to_ass(th["subtitle_color"]),
         ),
     ]
