@@ -95,7 +95,10 @@ def test_clear_presses_select_all_and_backspace(monkeypatch, tmp_path):
     }
     tl = runner.run(sc, tmp_path, record=False, hold=0)
     presses = [c for c in d.calls if c[0] == "press"]
-    assert ("press", "t1", "Ctrl+A", "#date") in presses
+    from tirai.system import primary_modifier
+
+    mod = primary_modifier()
+    assert ("press", "t1", f"{mod}+A", "#date") in presses
     assert ("press", "t1", "Backspace", "#date") in presses
     assert tl["steps"][0]["status"] == "passed"
 
