@@ -461,3 +461,66 @@ def test_runner_action_annotate_zoom_and_expect_hud(monkeypatch, tmp_path):
     assert st["zoom"]["out"] is True
     assert st["zoom"]["out_at"] is not None
     assert len(st["zoom"]["follow"]) == 2
+
+
+def test_dry_run_performance_skips_overhead_and_keeps_fail_screenshots(monkeypatch, tmp_path):
+    from test_runner import FakeDriver
+
+    d = FakeDriver()
+    evals = []
+    shots = []
+
+    def eval_fn(tab, expr):
+        evals.append(expr)
+        if "#missing" in expr:
+            return [False, "not found"]
+        return [True, "ok"]
+
+    monkeypatch.setattr(d, "evaluate", eval_fn)
+    monkeypatch.setattr(d, "screenshot", lambda tab, path: shots.append(path))
+    monkeypatch.setattr(runner, "make_driver", lambda *a, **k: d)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+
+    sc = _base_scenario()
+    sc["steps"].append(
+        {
+            "id": "S2",
+            "tab": "app",
+            "title": "Failing step",
+            "actions": [{"click": "#go"}],
+            "expect": [{"visible": "#missing"}],
+        }
+    )
+    sc["settings"] = {"expect_timeout": 0.01}
+
+    tl = runner.run(sc, tmp_path / "dry", record=False)
+    # Dry-run skips annotate.js injection and skips screenshots on PASS steps, but still screenshots FAIL steps.
+    assert not any("__ann.clear" in e for e in evals)
+    assert tl["steps"][0]["status"] == "passed"
+    assert "screenshot" not in tl["steps"][0]
+    assert tl["steps"][1]["status"] == "failed"
+    assert tl["steps"][1]["screenshot"] == "step-S2.png"
+    assert len(shots) == 1
+    assert tl["hold"] == 0.0
+
+
+def test_agentbrowser_avoids_redundant_tab_resets(monkeypatch):
+    from tirai.agentbrowser import AgentBrowser
+
+    ab = AgentBrowser(session="s1")
+    ab.active = "t1"
+    monkeypatch.setattr(ab, "run", lambda *a, **k: {})
+
+    # With expect_popups=False, click and press keep active tab cached
+    ab.expect_popups = False
+    ab.click("t1", "#btn")
+    assert ab.active == "t1"
+    ab.press("t1", "Enter")
+    assert ab.active == "t1"
+
+    # With expect_popups=True, non-nav keys like Tab keep active tab, while Enter/click reset it
+    ab.expect_popups = True
+    ab.press("t1", "Tab")
+    assert ab.active == "t1"
+    ab.press("t1", "Enter")
+    assert ab.active is None

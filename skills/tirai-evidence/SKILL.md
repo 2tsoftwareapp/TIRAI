@@ -19,7 +19,23 @@ All required checks must be `ok`. Works on macOS, Linux and Windows; follow
 [references/setup.md](references/setup.md). The default driver needs no extension; only `driver: bsk` needs the user to install the BrowserSkill extension;
 never use `sudo` without asking.
 
-## 1. Write the scenario with the user (Step-by-Step Evidence Methodology)
+## 1. Plan & write the scenario (Step-by-Step Evidence Methodology)
+
+### 1a. Test Plan & YAML Completeness Standard (Never skip steps or fields)
+
+Before writing YAML, produce a **complete, step-by-step Test Plan** and get user approval — then map it **1-to-1** into the scenario YAML with zero silent omissions:
+
+1. **Full upstream → target → downstream chain:** cover the real user journey end-to-end (e.g., upstream input/creation screen → processing/update screen → print/export/search screen → DB verification), instead of skipping upstream creation or assuming magic pre-existing data.
+2. **Field-by-field & case-by-case matrix:** explicitly list **every** input field, filter/search criterion, business state/branch, boundary/validation/edge case, and **every** output field (UI columns, DB columns, PDF/Excel/CSV cells, totals, pagination/page breaks) that must be verified. Never summarize as "fill form" or "check result".
+3. **Detailed step breakdown in the plan:** for every video/scenario, list numbered steps with:
+   `Step ID | Screen / Tab | Exact Input Data | Atomic User Actions | Exact Expected Assertions (UI / DB / File)`.
+4. **1-to-1 YAML expansion (no collapsed steps or spot-check-only assertions):**
+   - Every navigation click, modal open/fill/confirm, search, edit, toast/dialog check, download, and DB check must be an explicit step/action in the YAML.
+   - Every interactive field gets its own action (`clear`/`fill`/`select`/`click`/`press`) with a clear `label:`.
+   - Every planned field/column/cell/state gets its own `expect:` entry with a clear `label:` (UI `text_contains`/`value`/`visible`, DB `db_assert`/DBX query, and downloaded file checks) so the live `EXPECTATIONS` HUD proves 100% of the plan.
+   - If a planned check cannot be automated or is out of scope, state it explicitly to the user before dry-run — never silently drop it from the YAML.
+
+### 1b. Scenario Authoring (Visual Narration & Locators)
 
 Start from `tirai init scenarios/<name>.yaml` and fill it in. Follow the **step-by-step action + per-expect evidence standard**:
 
@@ -63,10 +79,11 @@ steps:
 - Override per step when needed: `action_annotate: false` or `show_expects: false` on dense setup/login steps.
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
-- Name elements once under `targets:` and use `@name` in actions/expect/annotate/zoom (fallback locators like
-  `testid=`, `#id`, `role=button[name="Save"]`, `label=`, `text=`; see [references/scenario.md](references/scenario.md)).
-  Get them with `tirai inspect <file>` (or `tirai inspect <url>`): it dry-runs the flow and writes each page's
-  elements plus a ready `targets:` block to `evidence/inspect/`, pages after login included; do not guess.
+- Name elements once under `targets:` and use `@name` in actions/expect/annotate/zoom.
+- **Locator priority & Preflight `id` / `data-testid` rule (for speed and stability):**
+  1. **Prefer `data-testid` (`testid=...`) or stable `#id` first** — O(1) lookup, immune to label/language changes, and avoids slow full-DOM `role=`/`text=` scans. **During Preflight, if you have access to the app's source code (dev/staging), check key controls (action buttons, inputs, grid checkboxes/row edit buttons, modals, toasts) and recommend/ask the user to add stable `data-testid` or `id` attributes** if they are missing.
+  2. **Second choice:** stable form names (`input[name=...]`, `select[name=...]`).
+  3. **Last-resort fallback (production / black-box targets without source access):** run `tirai inspect <file>` (or `tirai inspect <url>`) to discover `role=`, `label=`, `text=` locators; never guess selectors.
   Or let the user click the flow once: `tirai capture <url> -o <file>` opens a browser; the user clicks the flow
   and closes the window.
 - A failure ending in `nearby: …` lists the page's closest elements: fix the target from it. A `warning: target
