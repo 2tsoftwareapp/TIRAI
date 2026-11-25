@@ -16,7 +16,7 @@ ACTIONS = {
 EXPECTS = {
     "visible", "not_visible", "text_contains", "text_matches", "url_contains",
     "value", "attribute", "count", "request", "no_console_errors", "db",
-    "pdf", "xlsx",
+    "pdf", "xlsx", "image",
 }  # fmt: skip
 # Required keys for mapping-style arguments; validated up front so a dry-run never fails on a typo.
 REQUIRED = {
@@ -33,19 +33,31 @@ REQUIRED = {
     "download": ("selector",),
     "pdf": ("path",),
     "xlsx": ("path",),
+    "image": ("path",),
 }
-PDF_KEYS = {"path", "pages", "contains"}
-XLSX_KEYS = {"path", "sheets", "contains"}
+PREVIEW_COMMON_KEYS = {"annotate", "preview", "zoom", "spotlight", "hold", "title", "subtitle"}
+PDF_KEYS = {"path", "pages", "contains", *PREVIEW_COMMON_KEYS}
+XLSX_KEYS = {"path", "sheets", "contains", "sheet", "max_rows", "max_cols", *PREVIEW_COMMON_KEYS}
+IMAGE_KEYS = {"path", "contains", *PREVIEW_COMMON_KEYS}
+PREVIEW_ANNOTATIONS = {"box", "arrow", "highlight", "circle", "badge"}
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
 SETTINGS = {
     "hold", "timing_scale", "expect_timeout", "camera", "camera_factor", "fast_forward",
     "viewport", "auto_scroll", "strict_network", "ignore_requests", "trim_still",
-    "single_tab",
+    "single_tab", "pace", "action_delay", "typing_delay", "cursor_glide", "spotlight", "theme",
 }  # fmt: skip
+PACE_MODES = {"fast", "human", "slow"}
+CAMERA_MODES = {"follow", "annotate"}
+THEME_KEYS = {
+    "font", "header_size", "header_height", "subtitle_size", "subtitle_height",
+    "subtitle_bg", "subtitle_color", "tab_colors", "pass_color", "fail_color",
+    "accent", "cursor_color", "ripple_color", "spotlight_opacity", "label_font",
+}  # fmt: skip
+HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 DB_KEYS = {"database", "sql", "rows", "columns", "save"}
 STEP_KEYS = {
-    "id", "tab", "title", "subtitle", "actions", "expect", "annotate", "hold", "zoom", "layout", "split_with",
-    "once", "case", "save", "writes", "for_each", "as",
+    "id", "tab", "title", "subtitle", "actions", "expect", "annotate", "hold", "zoom", "spotlight",
+    "layout", "split_with", "once", "case", "save", "writes", "for_each", "as",
 }  # fmt: skip
 # Playwright-only selector syntax: agent-browser/bsk take CSS, so these never match.
 PLAYWRIGHT_RE = re.compile(
@@ -279,8 +291,8 @@ def _check_args(kind, arg, where, errors):
             errors.append(f"{where}: db has unknown {', '.join(sorted(unknown))} (allowed: {allowed})")
         if arg.get("save") is not None and not isinstance(arg["save"], dict):
             errors.append(f"{where}: db save must map variable -> column")
-    if kind in ("pdf", "xlsx") and isinstance(arg, dict):
-        allowed = PDF_KEYS if kind == "pdf" else XLSX_KEYS
+    if kind in ("pdf", "xlsx", "image") and isinstance(arg, dict):
+        allowed = PDF_KEYS if kind == "pdf" else XLSX_KEYS if kind == "xlsx" else IMAGE_KEYS
         unknown = set(arg) - allowed
         if unknown:
             allowed_s = ", ".join(sorted(allowed))
@@ -293,6 +305,15 @@ def _check_args(kind, arg, where, errors):
             and all(isinstance(x, int) for x in pages)
         ):
             errors.append(f"{where}: pdf pages must be an int (exact) or [min, max]")
+        ann = arg.get("annotate")
+        if ann is not None and ann not in (True, False, "auto"):
+            if not isinstance(ann, list):
+                errors.append(f"{where}: {kind}.annotate must be true, 'auto' or a list of annotations")
+            else:
+                for k_i, item in enumerate(ann):
+                    ak = _single_key(item, f"{where}.{kind}.annotate[{k_i}]", PREVIEW_ANNOTATIONS, errors)
+                    if ak and not isinstance(item[ak], (str, dict)):
+                        errors.append(f"{where}.{kind}.annotate[{k_i}]: {ak} needs text/cell/x,y")
     if kind == "save" and isinstance(arg, dict) and arg.get("timeout") is not None:
         if not isinstance(arg["timeout"], int | float) or arg["timeout"] <= 0:
             errors.append(f"{where}: save timeout must be a positive number of seconds")
@@ -388,6 +409,32 @@ def _check_step_body(st, where, tabs, errors, need_expect=True):
             errors += selector_problems(e, f"{where}.expect[{j}]")
 
 
+def _check_theme(th, where, errors):
+    if th is None:
+        return
+    if not isinstance(th, dict):
+        errors.append(f"{where}: must be a mapping")
+        return
+    for key in th:
+        if key not in THEME_KEYS:
+            errors.append(f"{where}.{key}: unknown (allowed: {', '.join(sorted(THEME_KEYS))})")
+    for key in ("subtitle_bg", "subtitle_color", "pass_color", "fail_color", "accent", "cursor_color", "ripple_color"):
+        val = th.get(key)
+        if val is not None and (not isinstance(val, str) or not HEX_COLOR_RE.match(val)):
+            errors.append(f"{where}.{key}: must be a #RRGGBB hex color")
+    if th.get("tab_colors") is not None:
+        tc = th["tab_colors"]
+        if not isinstance(tc, list) or not tc or not all(isinstance(c, str) and HEX_COLOR_RE.match(c) for c in tc):
+            errors.append(f"{where}.tab_colors: must be a non-empty list of #RRGGBB hex colors")
+    for key in ("header_size", "header_height", "subtitle_size", "subtitle_height"):
+        val = th.get(key)
+        if val is not None and (not isinstance(val, int) or val <= 0):
+            errors.append(f"{where}.{key}: must be a positive integer")
+    op = th.get("spotlight_opacity")
+    if op is not None and (not isinstance(op, int | float) or not 0 <= op <= 0.85):
+        errors.append(f"{where}.spotlight_opacity: must be between 0 and 0.85")
+
+
 def _check_privacy(p, errors):
     if p is None:
         return
@@ -437,6 +484,16 @@ def validate(sc) -> list[str]:
         errors.append("settings.ignore_requests: must be a list of URL substrings")
     if settings.get("single_tab") is not None and not isinstance(settings["single_tab"], bool):
         errors.append("settings.single_tab: must be true or false")
+    if settings.get("pace") is not None and settings["pace"] not in PACE_MODES:
+        errors.append(f"settings.pace: must be one of {', '.join(sorted(PACE_MODES))}")
+    if settings.get("camera") is not None and settings["camera"] not in CAMERA_MODES:
+        errors.append(f"settings.camera: must be one of {', '.join(sorted(CAMERA_MODES))}")
+    if settings.get("spotlight") is not None and not isinstance(settings["spotlight"], bool):
+        errors.append("settings.spotlight: must be true or false")
+    if settings.get("cursor_glide") is not None and not isinstance(settings["cursor_glide"], bool):
+        errors.append("settings.cursor_glide: must be true or false")
+    _check_theme(sc.get("theme"), "theme", errors)
+    _check_theme(settings.get("theme"), "settings.theme", errors)
     _check_privacy(sc.get("privacy"), errors)
     from tirai import targets as tg
 
@@ -515,8 +572,13 @@ def validate(sc) -> list[str]:
                 if "sql" not in arg or "rows" not in arg:
                     errors.append(f"{where}.expect[{j}]: db needs sql and rows")
         zoom = st.get("zoom")
-        if zoom is not None and not (isinstance(zoom, str) or (isinstance(zoom, dict) and "target" in zoom)):
-            errors.append(f"{where}: zoom needs a selector or a mapping with target")
+        if zoom is not None and not (
+            isinstance(zoom, str)
+            or (isinstance(zoom, dict) and ("target" in zoom or zoom.get("mode") in ("annotate", "follow")))
+        ):
+            errors.append(f"{where}: zoom needs a selector, 'annotate'/'follow', or a mapping with target/mode")
+        if st.get("spotlight") is not None and not isinstance(st["spotlight"], bool):
+            errors.append(f"{where}: spotlight must be true or false")
         if st.get("layout") not in (None, "split"):
             errors.append(f"{where}: layout must be split")
         for j, a in enumerate(st.get("annotate", []) or []):

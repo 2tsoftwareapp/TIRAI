@@ -16,10 +16,45 @@ from tirai import export, report
 from tirai.system import ffmpeg_bin, ffprobe_bin, find_font, run_text, subtitle_font_name  # noqa: F401
 
 FPS = 30
-TOP, BOTTOM = 40, 64  # header bar (tab/step/status) and subtitle band
+TOP, BOTTOM = 40, 84  # header bar (tab/step/status) and subtitle band (fits 2 lines cleanly)
 DEFAULT_SIZE = (1280, 720)
 DRIVER_NAMES = {"agent-browser": "agent-browser", "bsk": "BrowserSkill", "agent-desktop": "agent-desktop"}
 TAB_COLORS = ["0x1f6feb", "0x7c3aed", "0x0e7490", "0xb45309"]
+THEME_DEFAULTS = {
+    "header_size": 20,
+    "header_height": TOP,
+    "subtitle_size": 24,
+    "subtitle_height": BOTTOM,
+    "subtitle_bg": "#0f172a",
+    "subtitle_color": "#ffffff",
+    "tab_colors": ["#1f6feb", "#7c3aed", "#0e7490", "#b45309"],
+    "pass_color": "#16a34a",
+    "fail_color": "#dc2626",
+    "accent": "#e5252a",
+    "spotlight_opacity": 0.30,
+}
+
+
+def resolve_theme(tl: dict | None = None) -> dict:
+    th = {**THEME_DEFAULTS, **((tl or {}).get("theme") or {})}
+    th["header_height"] = int(th["header_height"]) - int(th["header_height"]) % 2
+    th["subtitle_height"] = int(th["subtitle_height"]) - int(th["subtitle_height"]) % 2
+    return th
+
+
+def _hex_to_ff(color: str) -> str:
+    c = str(color or "#0f172a").strip()
+    if c.startswith("0x"):
+        return c
+    return "0x" + c.lstrip("#")
+
+
+def _hex_to_ass(color: str) -> str:
+    c = str(color or "#ffffff").strip().lstrip("#")
+    if len(c) != 6:
+        return "&H00FFFFFF"
+    r, g, b = c[0:2], c[2:4], c[4:6]
+    return f"&H00{b}{g}{r}".upper()
 
 
 def ff(*args, cwd=None):
@@ -82,9 +117,9 @@ def ass_escape(text):
     return str(text).replace("\r", " ").replace("\n", "\\N")
 
 
-def _ass_style(name, font, size, bold, outline, align, ml, mr, mv):
+def _ass_style(name, font, size, bold, outline, align, ml, mr, mv, color="&H00FFFFFF"):
     return (
-        f"Style: {name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,{bold},0,0,0,100,100,0,0,1,"
+        f"Style: {name},{font},{size},{color},&H000000FF,&H00000000,&H80000000,{bold},0,0,0,100,100,0,0,1,"
         f"{outline},0,{align},{ml},{mr},{mv},1"
     )
 
@@ -115,27 +150,35 @@ def _ass_doc(play_x, styles, events):
 def build_ass(tl, size, title_seconds):
     """One ASS file for the title card, header bar and subtitles; libass font fallback covers CJK."""
     W, H = size
-    fh = H + TOP + BOTTOM
+    th = resolve_theme(tl)
+    top, bottom = th["header_height"], th["subtitle_height"]
+    fh = H + top + bottom
     k = 288 / fh
     play_x = max(16, round(W * k))
-    font = subtitle_font_name()
+    font = th.get("font") or subtitle_font_name()
+    sub_color = _hex_to_ass(th["subtitle_color"])
+    sub_fs = max(1, round(th["subtitle_size"] * k))
+    sub_small_fs = max(1, round(max(16, th["subtitle_size"] - 5) * k))
+    sub_mv = max(2, round(max(8, (bottom - th["subtitle_size"] * 2.3) / 2) * k))
+    hdr_fs = max(1, round(th["header_size"] * k))
+    hdr_mv = max(1, round(max(4, (top - th["header_size"]) / 2) * k))
     passed = sum(s["status"] == "passed" for s in tl["steps"])
     styles = [
-        _ass_style("Sub", font, 10, 0, 0.6, 2, 10, 10, 6),
+        _ass_style("Sub", font, sub_fs, 0, 0.5, 2, max(6, round(24 * k)), max(6, round(24 * k)), sub_mv, sub_color),
         _ass_style(
             "Hdr",
             font,
-            max(1, round(20 * k)),
+            hdr_fs,
             -1,
             0,
             7,
             max(2, round(16 * k)),
             max(10, round(110 * k)),
-            max(1, round(10 * k)),
+            hdr_mv,
         ),
-        _ass_style("T1", font, max(1, round(44 * k)), -1, 0, 5, 0, 0, 0),
-        _ass_style("T2", font, max(1, round(24 * k)), 0, 0, 5, 0, 0, 0),
-        _ass_style("T3", font, max(1, round(20 * k)), 0, 0, 5, 0, 0, 0),
+        _ass_style("T1", font, max(1, round(44 * k)), -1, 0, 5, 0, 0, 0, sub_color),
+        _ass_style("T2", font, max(1, round(24 * k)), 0, 0, 5, 0, 0, 0, sub_color),
+        _ass_style("T3", font, max(1, round(20 * k)), 0, 0, 5, 0, 0, 0, sub_color),
         _ass_style("Pdf", font, max(1, round(22 * k)), -1, 0, 7, max(2, round(20 * k)), 10, max(1, round(8 * k))),
     ]
     cx = round(play_x / 2)
@@ -159,7 +202,11 @@ def build_ass(tl, size, title_seconds):
         events.append((a, b, "Hdr", ass_escape(f"{label}   |   {s['id']}  {s.get('title', '')}")))
         sub_a = ass_ts(s["final_start"] + 0.2)
         sub_b = ass_ts(max(s["final_start"] + 0.3, s["final_end"] - 0.1))
-        events.append((sub_a, sub_b, "Sub", ass_escape(s.get("subtitle") or s.get("title", ""))))
+        raw_sub = str(s.get("subtitle") or s.get("title", ""))
+        sub_txt = ass_escape(raw_sub)
+        if len(raw_sub) > 105:
+            sub_txt = f"{{\\fs{sub_small_fs}}}{sub_txt}"
+        events.append((sub_a, sub_b, "Sub", sub_txt))
     return _ass_doc(play_x, styles, events)
 
 
@@ -184,15 +231,17 @@ def encode_args(out):
     ]
 
 
-def title_card(tmp, out, seconds, frame):
+def title_card(tmp, out, seconds, frame, tl=None):
     """Plain colour card; its text is burned with the subtitles pass (ASS, so CJK fonts fall back)."""
     W, H = frame
-    FH = H + TOP + BOTTOM
+    th = resolve_theme(tl)
+    FH = H + th["header_height"] + th["subtitle_height"]
+    bg = _hex_to_ff(th["subtitle_bg"])
     ff(
         "-f",
         "lavfi",
         "-i",
-        f"color=c=0x0f172a:s={W}x{FH}:d={seconds}:r={FPS}",
+        f"color=c={bg}:s={W}x{FH}:d={seconds}:r={FPS}",
         *encode_args(out),
         cwd=tmp,
     )
@@ -280,8 +329,8 @@ def add_still_spans(step, spans, hold):
         step["idle"] = sorted(idle)
 
 
-def zoom_filter(step, seg_size, clip_start=0.0):
-    """Ease into the step's `zoom` target (rect captured by the runner) and hold; '' when not zoomed."""
+def zoom_filter(step, seg_size, clip_start=0.0, clip_dur=None):
+    """Ease into the step's `zoom` target, hold, and optionally ease back out (`out: true`)."""
     z = step.get("zoom")
     if not z:
         return ""
@@ -296,8 +345,19 @@ def zoom_filter(step, seg_size, clip_start=0.0):
     factor = max(1.0, min(float(z.get("factor", 1.8)), fit))
     if factor <= 1.01:
         return ""
-    u = f"clip((on/{FPS}-{z.get('at', 0.4)})/0.6,0,1)"
-    zoom = f"1+{factor - 1:.3f}*{u}*{u}*(3-2*{u})"
+    at = float(z.get("at", 0.4))
+    in_s = max(0.15, float(z.get("in", 0.6)))
+    T = f"(on/{FPS})"
+    u_in = f"clip(({T}-{at:.3f})/{in_s:.3f},0,1)"
+    ease_in = f"({u_in}*{u_in}*(3-2*{u_in}))"
+    if z.get("out") and clip_dur is not None and clip_dur > at + in_s + 0.35:
+        out_s = max(0.15, float(z.get("out_duration", 0.55)))
+        out_at = max(at + in_s + 0.25, clip_dur - out_s - 0.15)
+        u_out = f"clip(({T}-{out_at:.3f})/{out_s:.3f},0,1)"
+        ease = f"({ease_in}*(1-{u_out}*{u_out}*(3-2*{u_out})))"
+    else:
+        ease = ease_in
+    zoom = f"1+{factor - 1:.3f}*{ease}"
     return (
         f"scale=iw*2:ih*2,zoompan=z='{zoom}':d=1:fps={FPS}:s={sw}x{sh}:"
         f"x='clip({cx:.1f}-iw/zoom/2,0,iw-iw/zoom)':y='clip({cy:.1f}-ih/zoom/2,0,ih-ih/zoom)',"
@@ -306,38 +366,44 @@ def zoom_filter(step, seg_size, clip_start=0.0):
 
 def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
     W, H = frame
-    FH = H + TOP + BOTTOM
+    th = resolve_theme(tl)
+    top, bottom = th["header_height"], th["subtitle_height"]
+    FH = H + top + bottom
+    bg = _hex_to_ff(th["subtitle_bg"])
+    tab_colors = [_hex_to_ff(c) for c in th["tab_colors"]]
     seg = rec_dir / step["segment"]
     start = max(0.0, step["start"] - lead)
     dur = step["end"] - start
-    color = TAB_COLORS[list(tl["tabs"]).index(step["tab"]) % len(TAB_COLORS)]
+    color = tab_colors[list(tl["tabs"]).index(step["tab"]) % len(tab_colors)]
     status = "PASS" if step["status"] == "passed" else "FAIL"
     st = text_file(tmp, f"st-{step['id']}.txt", status)
-    st_color = "0x16a34a" if status == "PASS" else "0xdc2626"
+    st_color = _hex_to_ff(th["pass_color"] if status == "PASS" else th["fail_color"])
     bold = "font-bold.ttf"
     ff_filter, saved, shown = warp(step.get("idle"), start)
     badges = "".join(
-        f"drawtext=fontfile={bold}:text='{s:g}x':fontsize=22:fontcolor=white:box=1:boxcolor=0x0f172acc:boxborderw=8:"
+        f"drawtext=fontfile={bold}:text='{s:g}x':fontsize=22:fontcolor=white:box=1:boxcolor={bg}cc:boxborderw=8:"
         f"x=w-text_w-24:y=24:enable='between(t,{a:.2f},{b:.2f})',"
         for a, b, s in shown
     )
+    eff_dur = max(0.2, dur - saved)
     cut = (
         f"fps={FPS},tpad=stop_mode=clone:stop_duration=10,"
         f"trim=start={start:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,"
-        f"{zoom_filter(step, video_size(seg), start)}{ff_filter}{badges}"
+        f"{zoom_filter(step, video_size(seg), start, clip_dur=eff_dur)}{ff_filter}{badges}"
     )
     dur -= saved
     # The header text is burned by the subtitles pass (ASS); the clip only draws the bar and badge.
+    badge_y = max(2, (top - 28) // 2)
     chrome = (
-        f"pad={W}:{H + TOP}:0:{TOP}:color={color},pad={W}:{FH}:0:0:color=0x0f172a,"
-        f"drawbox=x=iw-96:y=6:w=80:h=28:color={st_color}:t=fill,"
-        f"drawtext=fontfile={bold}:textfile={st}:fontsize=18:fontcolor=white:x=w-56-text_w/2:y=11"
+        f"pad={W}:{H + top}:0:{top}:color={color},pad={W}:{FH}:0:0:color={bg},"
+        f"drawbox=x=iw-96:y={badge_y}:w=80:h=28:color={st_color}:t=fill,"
+        f"drawtext=fontfile={bold}:textfile={st}:fontsize=18:fontcolor=white:x=w-56-text_w/2:y={badge_y + 5}"
     )
 
     def fit(w, h):
         return (
             f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=0x0f172a,setsar=1"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color={bg},setsar=1"
         )
 
     if split_image:
@@ -345,7 +411,7 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
         half = W // 2 - W // 2 % 2
         graph = (
             f"[1:v]{fit(half, H)}[l];[0:v]{cut}{fit(W - half, H)}[r];"
-            f"[l][r]hstack=inputs=2:shortest=1,drawbox=x={half - 1}:y=0:w=2:h=ih:color=0x0f172a:t=fill,{chrome}"
+            f"[l][r]hstack=inputs=2:shortest=1,drawbox=x={half - 1}:y=0:w=2:h=ih:color={bg}:t=fill,{chrome}"
         )
         inputs = ["-i", str(seg.resolve()), "-loop", "1", "-framerate", str(FPS), "-i", str(split_image.resolve())]
         ff(*inputs, "-filter_complex", graph, "-t", f"{dur:.3f}", "-an", *encode_args(Path(out).resolve()), cwd=tmp)
@@ -402,54 +468,166 @@ def audio_seconds(path):
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
 
 
-def pdf_page_ass(tmpd, d, i, n, W, H):
-    """One-event ASS burned on a PDF page clip: 'PDF <file> — page i/n' in the header strip."""
-    k = 288 / (H + TOP + BOTTOM)
+def pdf_page_ass(tmpd, d, i, n, W, H, tl=None, duration=4.0, header=None, subtitle=None):
+    """ASS overlay for a preview page clip (header strip + optional bottom subtitle)."""
+    th = resolve_theme(tl)
+    top, bottom = th["header_height"], th["subtitle_height"]
+    fh = H + top + bottom
+    k = 288 / fh
     play_x = max(16, round(W * k))
-    style = _ass_style(
-        "Pdf", subtitle_font_name(), max(1, round(22 * k)), -1, 0, 7, max(2, round(20 * k)), 10, max(1, round(8 * k))
-    )
-    text = ass_escape(f"PDF {d['file']} — page {i}/{n}")
-    name = f"pdfpage-{d['step']}-{i}.ass"
-    (tmpd / name).write_text(_ass_doc(play_x, [style], [(ass_ts(0), ass_ts(4), "Pdf", text)]), encoding="utf-8")
+    font = th.get("font") or subtitle_font_name()
+    hdr_fs = max(1, round(th["header_size"] * k))
+    hdr_mv = max(1, round(max(4, (top - th["header_size"]) / 2) * k))
+    sub_fs = max(1, round(th["subtitle_size"] * k))
+    sub_mv = max(2, round(max(8, (bottom - th["subtitle_size"] * 2.3) / 2) * k))
+    styles = [
+        _ass_style("Pdf", font, hdr_fs, -1, 0, 7, max(2, round(20 * k)), max(10, round(110 * k)), hdr_mv),
+        _ass_style(
+            "Sub", font, sub_fs, 0, 0.5, 2, max(6, round(24 * k)), max(6, round(24 * k)), sub_mv,
+            _hex_to_ass(th["subtitle_color"]),
+        ),
+    ]
+    text = ass_escape(header or f"PDF {d['file']} — page {i}/{n}")
+    events = [(ass_ts(0), ass_ts(duration), "Pdf", text)]
+    if subtitle:
+        events.append((ass_ts(0.15), ass_ts(max(0.3, duration - 0.1)), "Sub", ass_escape(subtitle)))
+    name = f"preview-{d.get('step', 'p')}-{Path(d['file']).stem}-{i}.ass"
+    (tmpd / name).write_text(_ass_doc(play_x, styles, events), encoding="utf-8")
     return name
 
 
-def append_pdf_pages(tmpd, final, tl, rec_dir, size):
-    """Append rendered pages of PDFs downloaded with `download: {append: true}` to the end of final.mp4."""
-    from tirai.filescheck import pdf_page_images
+def _preview_zoom_spec(page_info: dict, W: int, H: int, zoom_cfg):
+    """Map an image-space annotation rect into the letterboxed (W, H) frame for zoom-in/out."""
+    if not zoom_cfg or not page_info.get("rect"):
+        return None
+    iw, ih = page_info["size"]
+    rx, ry, rw, rh = page_info["rect"]
+    scale = min(W / max(iw, 1), H / max(ih, 1))
+    off_x = (W - iw * scale) / 2.0
+    off_y = (H - ih * scale) / 2.0
+    z = zoom_cfg if isinstance(zoom_cfg, dict) else {}
+    return {
+        "zoom": {
+            "rect": [off_x + rx * scale, off_y + ry * scale, rw * scale, rh * scale],
+            "viewport": [W, H],
+            "factor": float(z.get("factor", 1.7)),
+            "at": float(z.get("at", 0.65)),
+            "in": float(z.get("in", 0.65)),
+            "out": bool(z.get("out", True)),
+            "out_duration": float(z.get("out_duration", 0.6)),
+        }
+    }
 
-    pdfs = [d for d in tl.get("downloads", []) if d.get("append") and d["file"].lower().endswith(".pdf")]
-    if not pdfs:
-        return
+
+def append_pdf_pages(tmpd, final, tl, rec_dir, size):
+    """Append rendered (and optionally annotated/zoomed) PDF, Excel, and image previews to final.mp4."""
+    from tirai import previews as pv
+
+    th = resolve_theme(tl)
+    top, bottom = th["header_height"], th["subtitle_height"]
+    bg = _hex_to_ff(th["subtitle_bg"])
     W, H = size
-    FH = H + TOP + BOTTOM
+    FH = H + top + bottom
+
+    items = list(tl.get("previews", []))
+    covered = {str(p.get("path", "")) for p in items}
+    for d in tl.get("downloads", []):
+        if d.get("append") and d["path"] not in covered:
+            ext = Path(d["file"]).suffix.lower()
+            kind = "pdf" if ext == ".pdf" else "xlsx" if ext == ".xlsx" else None
+            if kind:
+                items.append({**d, "kind": kind})
+
+    if not items:
+        return
+
     clips = []
-    for d in pdfs:
-        src = rec_dir / d["path"]
-        try:
-            pages = pdf_page_images(src, tmpd / "pdfpages")
-        except RuntimeError as e:
-            print(f"warning: {e}; skipping PDF pages for {d['file']}")
+    for idx, item in enumerate(items, 1):
+        src = rec_dir / item["path"]
+        if not src.is_file():
             continue
-        for i, img in enumerate(pages, 1):
-            ass = pdf_page_ass(tmpd, d, i, len(pages), W, H)
-            clip = tmpd / f"pdf-{d['step']}-{i}.mp4"
+        kind = item.get("kind", "pdf")
+        anns = pv.normalize_preview_annotations(item.get("annotate"), item.get("contains"))
+        spot = bool(item.get("spotlight", False))
+        pdir = tmpd / f"prev-{idx}"
+        try:
+            if kind == "pdf":
+                pages = pv.render_pdf_preview(src, pdir, anns, theme=th, spotlight=spot)
+            elif kind == "xlsx":
+                pages = pv.render_xlsx_preview(
+                    src,
+                    pdir,
+                    anns,
+                    sheet=item.get("sheet"),
+                    max_rows=int(item.get("max_rows", 35)),
+                    max_cols=int(item.get("max_cols", 14)),
+                    theme=th,
+                    spotlight=spot,
+                )
+            else:
+                pages = pv.render_image_preview(src, pdir, anns, theme=th, spotlight=spot)
+        except RuntimeError as e:
+            print(f"warning: {e}; skipping preview for {item['file']}")
+            continue
+
+        default_dur = 5.0 if (anns and item.get("zoom")) else 4.0
+        dur = float(item.get("hold") or default_dur)
+        badge_chrome = ""
+        if "ok" in item:
+            status = "PASS" if item["ok"] else "FAIL"
+            st = text_file(tmpd, f"pv-st-{idx}.txt", status)
+            st_color = _hex_to_ff(th["pass_color"] if item["ok"] else th["fail_color"])
+            badge_y = max(2, (top - 28) // 2)
+            badge_chrome = (
+                f",drawbox=x=iw-96:y={badge_y}:w=80:h=28:color={st_color}:t=fill,"
+                f"drawtext=fontfile=font-bold.ttf:textfile={st}:fontsize=18:fontcolor=white:"
+                f"x=w-56-text_w/2:y={badge_y + 5}"
+            )
+
+        for pinfo in pages:
+            i, total = pinfo["page"], pinfo["total"]
+            img = pinfo["image"]
+            kind_lbl = "PDF" if kind == "pdf" else "EXCEL" if kind == "xlsx" else "IMAGE"
+            if item.get("title"):
+                hdr = f"{item['title']} ({i}/{total})" if total > 1 else item["title"]
+            elif kind == "xlsx" and pinfo.get("sheet"):
+                hdr = f"EXCEL {item['file']} [{pinfo['sheet']}]"
+            elif total > 1 or kind == "pdf":
+                hdr = f"{kind_lbl} {item['file']} — page {i}/{total}"
+            else:
+                hdr = f"{kind_lbl} {item['file']}"
+            ass = pdf_page_ass(
+                tmpd, item, i, total, W, H, tl=tl, duration=dur, header=hdr, subtitle=item.get("subtitle")
+            )
+            zstep = _preview_zoom_spec(pinfo, W, H, item.get("zoom"))
+            zfilt = zoom_filter(zstep, (W, H), 0.0, clip_dur=dur) if zstep else ""
+            clip = tmpd / f"prev-{idx}-{i}.mp4"
+            vf = (
+                f"fps={FPS},"
+                f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={bg},setsar=1,"
+                f"{zfilt}"
+                f"pad={W}:{H + top}:0:{top}:color=0x111827,"
+                f"pad={W}:{FH}:0:0:color={bg}"
+                f"{badge_chrome},"
+                f"subtitles={ass}:fontsdir=."
+            )
             ff(
                 "-loop",
                 "1",
+                "-framerate",
+                str(FPS),
                 "-t",
-                "4",
+                f"{dur:.2f}",
                 "-i",
-                img.relative_to(tmpd).as_posix(),
+                str(img.resolve()),
                 "-vf",
-                f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-                f"pad={W}:{FH}:0:40:color=0x111827,"
-                f"subtitles={ass}:fontsdir=.",
+                vf,
                 *encode_args(clip),
                 cwd=tmpd,
             )
             clips.append(clip)
+
     if not clips:
         return
     listing = "".join(f"file '{final.resolve()}'\n" for _ in [0]) + "".join(f"file '{c.name}'\n" for c in clips)
@@ -457,10 +635,13 @@ def append_pdf_pages(tmpd, final, tl, rec_dir, size):
     out = tmpd / "final-with-pdf.mp4"
     ff("-f", "concat", "-safe", "0", "-i", "pdf-list.txt", "-c", "copy", out.name, cwd=tmpd)
     shutil.move(out, final)
-    tl["downloads"] = [
-        dict(d, pdf_appended=True) if d.get("append") and d["file"].lower().endswith(".pdf") else d
-        for d in tl["downloads"]
-    ]
+    if tl.get("downloads"):
+        tl["downloads"] = [
+            dict(d, pdf_appended=True) if d.get("append") and d["file"].lower().endswith(".pdf") else d
+            for d in tl["downloads"]
+        ]
+    if tl.get("previews"):
+        tl["previews"] = [dict(p, appended=True) for p in tl["previews"]]
 
 
 def ocr_check(final, tl):
@@ -548,7 +729,7 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
         langs = subtitle_languages(tl, lang) or [None]
         clips, srt, t = [], {x: [] for x in langs}, 0.0
         title = tmpd / "00-title.mp4"
-        title_card(tmp, title, title_seconds, size)
+        title_card(tmp, title, title_seconds, size, tl=tl)
         clips.append(title)
         t += title_seconds
         for i, step in enumerate(tl["steps"], 1):

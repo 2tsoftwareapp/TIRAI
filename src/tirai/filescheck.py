@@ -100,3 +100,31 @@ def check_xlsx(path: Path, arg: dict) -> dict:
         sheets_ok = all(s in names for s in want)
     actual = {"sheets": names, "missing_text": missing} if missing or not sheets_ok else {"sheets": names}
     return {"type": "xlsx", "expected": arg, "actual": actual, "ok": sheets_ok and not missing}
+
+
+def check_image(path: Path, arg: dict) -> dict:
+    """`expect: image`: readable image file, optional OCR `contains: str|[str]`."""
+    _need("PIL", "excel")
+    from PIL import Image
+
+    try:
+        with Image.open(str(path)) as im:
+            w, h = im.size
+    except Exception as e:  # noqa: BLE001
+        return {"type": "image", "expected": arg, "actual": f"unreadable: {e}", "ok": False}
+    missing = []
+    if arg.get("contains") is not None:
+        from tirai.system import run_text, tesseract_bin
+
+        tbin = tesseract_bin()
+        if not tbin:
+            return {
+                "type": "image",
+                "expected": arg,
+                "actual": "tesseract not installed for contains check",
+                "ok": False,
+            }
+        p = run_text([tbin, str(path), "stdout"])
+        _, missing = _contains(p.stdout if p.returncode == 0 else "", arg.get("contains"))
+    actual = {"size": [w, h], "missing_text": missing} if missing else {"size": [w, h]}
+    return {"type": "image", "expected": arg, "actual": actual, "ok": not missing}
