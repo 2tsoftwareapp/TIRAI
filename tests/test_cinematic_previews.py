@@ -255,8 +255,17 @@ def test_annotated_pdf_xlsx_image_previews_and_compose(tmp_path):
     seg = tmp_path / "seg-01-app.mp4"
     subprocess.run(
         [
-            "ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
-            "-i", "color=c=navy:s=640x360:d=3:r=15", "-pix_fmt", "yuv420p", str(seg),
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=navy:s=640x360:d=3:r=15",
+            "-pix_fmt",
+            "yuv420p",
+            str(seg),
         ],
         check=True,
     )
@@ -313,3 +322,142 @@ def test_annotated_pdf_xlsx_image_previews_and_compose(tmp_path):
     assert dur >= 6.0  # title (1s) + step (~1.8s) + pdf preview (2.5s) + xlsx preview (2.0s)
     tl_final = json.loads((tmp_path / "timeline.final.json").read_text(encoding="utf-8"))
     assert all(p.get("appended") for p in tl_final["previews"])
+
+
+def test_validate_step_by_step_action_annotate_and_expect_labels():
+    ok = _base_scenario(
+        settings={
+            "pace": "human",
+            "camera": "action",
+            "action_annotate": True,
+            "action_zoom": 1.65,
+            "action_hold": 0.3,
+            "show_expects": True,
+            "expect_pos": "top-right",
+        }
+    )
+    ok["steps"][0]["action_annotate"] = True
+    ok["steps"][0]["show_expects"] = True
+    ok["steps"][0]["zoom"] = "action"
+    ok["steps"][0]["actions"] = [
+        {"clear": {"selector": "#qty", "label": "Xóa SL cũ"}},
+        {"fill": {"selector": "#qty", "value": "10", "label": "Nhập SL = 10", "zoom": 1.8}},
+        {"click": {"selector": "#go", "label": "Nhấn Lưu"}},
+    ]
+    ok["steps"][0]["expect"] = [
+        {"visible": {"selector": "#ok", "label": "Hiển thị thông báo OK"}},
+        {"not_visible": {"selector": "#err", "label": "Không có lỗi"}},
+        {"url_contains": {"text": "/done", "label": "Chuyển sang trang /done"}},
+        {"value": {"selector": "#qty", "equals": "10", "label": "SL hiển thị = 10"}},
+    ]
+    assert validate(ok) == []
+
+    bad = _base_scenario(
+        settings={
+            "action_annotate": "yes",
+            "action_zoom": 0.5,
+            "action_hold": -1,
+            "show_expects": 1,
+            "expect_pos": "center",
+        }
+    )
+    bad["steps"][0]["actions"] = [{"click": {"label": "missing selector"}}]
+    bad["steps"][0]["expect"] = [
+        {"visible": {"label": "missing selector"}},
+        {"url_contains": {"label": "missing text"}},
+    ]
+    errs = validate(bad)
+    assert any("settings.action_annotate" in e for e in errs)
+    assert any("settings.action_zoom" in e for e in errs)
+    assert any("settings.action_hold" in e for e in errs)
+    assert any("settings.show_expects" in e for e in errs)
+    assert any("settings.expect_pos" in e for e in errs)
+    assert any("click mapping is missing selector" in e for e in errs)
+    assert any("visible mapping is missing selector" in e for e in errs)
+    assert any("url_contains mapping is missing text" in e for e in errs)
+
+
+def test_follow_filter_supports_action_zoom_out():
+    step = {
+        "zoom": {
+            "follow": [
+                {"t": 0.6, "rect": [100, 120, 160, 40], "viewport": [1280, 720]},
+                {"t": 1.8, "rect": [400, 220, 120, 36], "viewport": [1280, 720]},
+            ],
+            "factor": 1.65,
+            "out": True,
+            "out_at": 2.6,
+        }
+    }
+    filt = compose.zoom_filter(step, (1280, 720), clip_start=0.2, clip_dur=4.5)
+    assert "zoompan=" in filt
+    assert "*(1-" in filt  # eases back out to 1.0x for expects/result HUD
+
+
+def test_runner_action_annotate_zoom_and_expect_hud(monkeypatch, tmp_path):
+    from test_runner import FakeDriver
+
+    d = FakeDriver()
+    evals = []
+
+    def eval_fn(tab, expr):
+        evals.append(expr)
+        if "innerWidth,innerHeight" in expr:
+            return [120, 140, 180, 40, 1280, 720]
+        if "targetLabel" in expr:
+            return "Lưu đơn"
+        if "type==='password'" in expr:
+            return False
+        if "__ann.actionCallout" in expr:
+            return [114, 134, 192, 52, 1280, 720]
+        if "__ann.expectHud" in expr:
+            return True
+        if "e.value" in expr:
+            return [False, "15"]
+        return [True, "ok"]
+
+    monkeypatch.setattr(d, "evaluate", eval_fn)
+    monkeypatch.setattr(runner, "make_driver", lambda *a, **k: d)
+    monkeypatch.setattr(runner.Runner, "pause", lambda self, s: None)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+
+    sc = _base_scenario(
+        settings={
+            "pace": "human",
+            "camera": "action",
+            "action_annotate": True,
+            "show_expects": True,
+            "spotlight": True,
+        }
+    )
+    sc["steps"][0]["actions"] = [
+        {"fill": {"selector": "#qty", "value": "10", "label": "Sửa SL = 10"}},
+        {"click": {"selector": "#go"}},
+    ]
+    sc["steps"][0]["expect"] = [
+        {"visible": {"selector": "#ok", "label": "Hiện nút OK"}},
+        {"value": {"selector": "#qty", "equals": "10", "label": "SL = 10"}},
+    ]
+    sc["steps"][0]["annotate"] = [{"box": {"target": "#ok", "label": "Kết quả"}}]
+
+    # Dry-run stays fast: no actionCallout or expectHud
+    runner.run(sc, tmp_path / "dry", record=False, hold=0)
+    assert not any("__ann.actionCallout" in e for e in evals)
+    assert not any("__ann.expectHud" in e for e in evals)
+
+    # Record draws action callouts, clears them, renders per-expect HUD (including FAIL detail),
+    # keeps HUD alive during step annotate, and records camera follow + ease-out at expect start.
+    evals.clear()
+    tl = runner.run(sc, tmp_path / "rec", record=True, hold=0)
+    assert any("__ann.actionCallout" in e and "Sửa SL = 10" in e for e in evals)
+    assert any("__ann.actionCallout" in e and "Click: Lưu đơn" in e for e in evals)
+    assert any("__ann.clearAction" in e for e in evals)
+    assert any("__ann.expectHud" in e and "Hiện nút OK" in e for e in evals)
+    assert any("__ann.expectHud" in e and "actual: 15" in e for e in evals)
+    assert any("keepHud:true" in e for e in evals)
+    st = tl["steps"][0]
+    assert st["status"] == "failed"
+    assert st["checks"][0]["label"] == "Hiện nút OK"
+    assert st["zoom"]["out"] is True
+    assert st["zoom"]["out_at"] is not None
+    assert len(st["zoom"]["follow"]) == 2

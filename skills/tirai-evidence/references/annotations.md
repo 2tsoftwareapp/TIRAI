@@ -41,3 +41,10 @@ A missing target throws, so the step fails instead of silently recording a wrong
 
 No looping or pulsing: BrowserSkill records at roughly 12 fps, so repeated motion looks jerky.
 Removing annotations fades them out in 0.16 s. Set a default for a page with `__ann.config({ anim: "none" })`.
+
+## Step-by-step Action Callouts & Per-Expect HUD
+
+When recording with `settings.action_annotate: true` and `settings.show_expects: true` (paired with `camera: action` and `pace: human`), TIRAI drives two additional shadow-DOM overlays automatically:
+
+- **`__ann.actionCallout(target, label, { color, spotlight })`** / **`__ann.clearAction()`**: highlights each interactive control (`click`, `fill`, `clear`, `select`, `press`, `download`) with a rounded box + floating pill (auto-labeled from the element's accessible name/text, or from `label:` on the action) while the camera zooms onto it, then clears before the next action.
+- **`__ann.expectHud(rows, { pos, passColor, failColor })`** / **`__ann.clearExpectHud()`**: renders a dark frosted **EXPECTATIONS** checklist card in the viewport corner (`top-right` by default) that ticks off every `expect:` item (`✓` green / `✗` red + `actual:` detail on failure) while boxing each checked DOM target, and remains visible alongside the step's final `annotate:` callouts.

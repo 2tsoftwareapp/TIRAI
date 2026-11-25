@@ -4,6 +4,13 @@
 #   tirai record <file>      dry-run -> record -> final.mp4 + subtitles + report
 # Secrets only via ${ENV_VAR}; they are never written to timeline or report.
 name: "My feature evidence"
+settings:
+  pace: human
+  camera: action
+  camera_factor: 1.65
+  action_annotate: true
+  show_expects: true
+  spotlight: true
 tabs:
   app:
     url: ${APP_URL}

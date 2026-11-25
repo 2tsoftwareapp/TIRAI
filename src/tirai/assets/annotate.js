@@ -25,7 +25,7 @@
  * Every call returns the annotation id. Missing targets throw.
  */
 (() => {
-  const VERSION = '0.4.0';
+  const VERSION = '0.5.0';
   if (window.__ann && window.__ann.version === VERSION) return VERSION;
   document.getElementById('__ann_host')?.remove();
   const CFG = {
@@ -37,6 +37,8 @@
     cursorColor: '#111827',
     rippleColor: '#2563eb',
     spotlightOpacity: 0.30,
+    passColor: '#16a34a',
+    failColor: '#dc2626',
   };
   const NS = 'http://www.w3.org/2000/svg';
   const host = document.createElement('div');
@@ -48,6 +50,25 @@
     svg.ann-canvas{position:fixed;inset:0;width:100vw;height:100vh;overflow:visible}
     .lbl{position:fixed;font:600 15px/1.3 var(--ann-font,system-ui,'Segoe UI',sans-serif);color:#fff;padding:6px 10px;border-radius:6px;
          box-shadow:0 2px 8px #0005;white-space:pre-wrap;max-width:360px}
+    .act-pill{position:fixed;display:inline-flex;align-items:center;gap:6px;font:700 14px/1.25 var(--ann-font,system-ui,'Segoe UI',sans-serif);
+              color:#fff;padding:6px 12px;border-radius:999px;box-shadow:0 4px 14px rgba(15,23,42,.38);border:1.5px solid rgba(255,255,255,.35);
+              white-space:nowrap;max-width:380px;overflow:hidden;text-overflow:ellipsis;z-index:11}
+    .exp-hud{position:fixed;width:370px;max-width:calc(100vw - 28px);max-height:calc(100vh - 36px);overflow:hidden;
+             background:rgba(15,23,42,.92);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+             color:#f8fafc;border:1px solid rgba(255,255,255,.15);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.42);
+             font-family:var(--ann-font,system-ui,'Segoe UI',sans-serif);z-index:12}
+    .exp-hdr{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;
+             border-bottom:1px solid rgba(255,255,255,.12);font-size:12px;font-weight:700;letter-spacing:.04em;color:#cbd5e1}
+    .exp-sum{padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;color:#fff}
+    .exp-list{display:flex;flex-direction:column;gap:5px;padding:8px 10px}
+    .exp-row{display:flex;align-items:flex-start;gap:8px;padding:5px 7px;border-radius:6px;background:rgba(255,255,255,.04)}
+    .exp-row.fail{background:rgba(220,38,38,.16);border:1px solid rgba(248,113,113,.35)}
+    .exp-ico{flex:0 0 18px;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+             font-size:11px;font-weight:800;color:#fff;margin-top:1px}
+    .exp-txt{min-width:0;flex:1}
+    .exp-lbl{font-size:12.5px;font-weight:600;line-height:1.3;color:#f8fafc;word-break:break-word}
+    .exp-det{font-size:11px;line-height:1.25;color:#cbd5e1;margin-top:2px;word-break:break-word}
+    .exp-row.fail .exp-det{color:#fca5a5}
     .badge{position:fixed;width:30px;height:30px;border-radius:50%;color:#fff;font:700 16px/30px system-ui,sans-serif;
            text-align:center;box-shadow:0 2px 6px #0006;border:2px solid #fff}
     .blur{position:fixed;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);background:#cbd5e1b3;border-radius:4px}
@@ -404,7 +425,172 @@
   }
   function cursorHide() { if (curEl) curEl.style.display = 'none'; return true; }
 
-  function clear(id) {
+  function targetLabel(sel) {
+    try {
+      const e = typeof sel === 'string' ? pick(sel) : null;
+      if (!e) return '';
+      const aria = (e.getAttribute('aria-label') || '').trim();
+      if (aria) return aria.slice(0, 32);
+      const lbBy = e.getAttribute('aria-labelledby');
+      if (lbBy) {
+        const ref = document.getElementById(lbBy.split(/\s+/)[0]);
+        const t = ref && (ref.innerText || ref.textContent || '').trim();
+        if (t) return t.slice(0, 32);
+      }
+      if (e.id) {
+        const lbl = document.querySelector(`label[for="${CSS.escape(e.id)}"]`);
+        const t = lbl && (lbl.innerText || lbl.textContent || '').trim();
+        if (t) return t.slice(0, 32);
+      }
+      const wrap = e.closest && e.closest('label');
+      if (wrap) {
+        const t = (wrap.innerText || wrap.textContent || '').trim();
+        if (t) return t.slice(0, 32);
+      }
+      const ph = (e.getAttribute('placeholder') || e.getAttribute('title') || '').trim();
+      if (ph) return ph.slice(0, 32);
+      const txt = (e.innerText || e.textContent || '').trim().replace(/\s+/g, ' ');
+      if (txt && txt.length <= 36) return txt;
+      return '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  let actPillEl = null;
+  function clearAction() {
+    clear('__act-box');
+    if (actPillEl) {
+      const old = actPillEl;
+      actPillEl = null;
+      if (reduced()) old.remove();
+      else old.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 140, fill: 'forwards' }).onfinish = () => old.remove();
+    }
+    if (spotEl && spotEl.getAttribute('data-act-spot') === '1') clearSpotlight();
+    return true;
+  }
+  function actionCallout(target, label, o = {}) {
+    mount();
+    clearAction();
+    const color = o.color || CFG.rippleColor || '#2563eb';
+    let b = null;
+    if (target) {
+      try {
+        box(target, { id: '__act-box', color, width: 3.5, padding: 6, anim: 'fade', duration: 180 });
+        const it = items.get('__act-box');
+        b = it && it._lastBox;
+      } catch (_) {}
+    }
+    if (label) {
+      const pill = document.createElement('div');
+      pill.className = 'act-pill';
+      pill.style.background = color;
+      pill.textContent = String(label);
+      root.appendChild(pill);
+      const pw = pill.offsetWidth, ph = pill.offsetHeight;
+      let px, py;
+      if (b && b.w > 0 && b.h > 0) {
+        px = b.x + b.w / 2 - pw / 2;
+        py = b.y - ph - 10;
+        if (py < 8) py = b.y + b.h + 10;
+      } else {
+        px = (innerWidth - pw) / 2;
+        py = 18;
+      }
+      px = Math.max(8, Math.min(px, innerWidth - pw - 8));
+      py = Math.max(8, Math.min(py, innerHeight - ph - 8));
+      pill.style.left = `${px}px`;
+      pill.style.top = `${py}px`;
+      if (!reduced()) pill.animate([{ opacity: 0, transform: 'translateY(4px) scale(.96)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: CFG.ease, fill: 'backwards' });
+      actPillEl = pill;
+    }
+    if (o.spotlight && b) {
+      spotlight(typeof o.spotlight === 'number' ? o.spotlight : Math.min(0.24, CFG.spotlightOpacity));
+      if (spotEl) spotEl.setAttribute('data-act-spot', '1');
+    }
+    return b ? [b.x, b.y, b.w, b.h, innerWidth, innerHeight] : null;
+  }
+
+  let hudEl = null;
+  let hudCount = 0;
+  function clearExpectHud() {
+    if (hudEl) {
+      const old = hudEl;
+      hudEl = null;
+      hudCount = 0;
+      if (reduced()) old.remove();
+      else old.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' }).onfinish = () => old.remove();
+    }
+    return true;
+  }
+  function expectHud(rows, o = {}) {
+    mount();
+    if (!Array.isArray(rows) || !rows.length) return clearExpectHud();
+    const passC = o.passColor || CFG.passColor || '#16a34a';
+    const failC = o.failColor || CFG.failColor || '#dc2626';
+    const passed = rows.filter((r) => r.ok).length;
+    const allOk = passed === rows.length;
+    if (!hudEl) {
+      hudEl = document.createElement('div');
+      hudEl.className = 'exp-hud';
+      root.appendChild(hudEl);
+      if (!reduced()) hudEl.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 200, easing: CFG.ease, fill: 'backwards' });
+    }
+    const pos = o.pos || 'top-right';
+    hudEl.style.top = pos.startsWith('top') ? '14px' : 'auto';
+    hudEl.style.bottom = pos.startsWith('bottom') ? '14px' : 'auto';
+    hudEl.style.right = pos.endsWith('right') ? '14px' : 'auto';
+    hudEl.style.left = pos.endsWith('left') ? '14px' : 'auto';
+
+    const title = o.title || 'EXPECTATIONS';
+    const prevCount = hudCount;
+    hudCount = rows.length;
+    hudEl.innerHTML = '';
+    const hdr = document.createElement('div');
+    hdr.className = 'exp-hdr';
+    const tspan = document.createElement('span');
+    tspan.textContent = title;
+    const sum = document.createElement('span');
+    sum.className = 'exp-sum';
+    sum.style.background = allOk ? passC : failC;
+    sum.textContent = `${passed}/${rows.length} ${allOk ? 'PASS' : 'FAIL'}`;
+    hdr.appendChild(tspan);
+    hdr.appendChild(sum);
+    hudEl.appendChild(hdr);
+
+    const listEl = document.createElement('div');
+    listEl.className = 'exp-list';
+    rows.forEach((r, idx) => {
+      const row = document.createElement('div');
+      row.className = r.ok ? 'exp-row pass' : 'exp-row fail';
+      const ico = document.createElement('div');
+      ico.className = 'exp-ico';
+      ico.style.background = r.ok ? passC : failC;
+      ico.textContent = r.ok ? '✓' : '✗';
+      const txt = document.createElement('div');
+      txt.className = 'exp-txt';
+      const lbl = document.createElement('div');
+      lbl.className = 'exp-lbl';
+      lbl.textContent = String(r.label || '');
+      txt.appendChild(lbl);
+      if (r.detail) {
+        const det = document.createElement('div');
+        det.className = 'exp-det';
+        det.textContent = String(r.detail);
+        txt.appendChild(det);
+      }
+      row.appendChild(ico);
+      row.appendChild(txt);
+      listEl.appendChild(row);
+      if (!reduced() && idx >= prevCount) {
+        row.animate([{ opacity: 0, transform: 'translateX(8px)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: CFG.ease, fill: 'backwards' });
+      }
+    });
+    hudEl.appendChild(listEl);
+    return true;
+  }
+
+  function clear(id, opts = {}) {
     const drop = (it) => {
       items.delete(it.id);
       const nodes = [it.g, it.label, it.div].filter(Boolean);
@@ -413,6 +599,8 @@
     };
     if (id) { const it = items.get(id); if (it) drop(it); return; }
     clearSpotlight();
+    clearAction();
+    if (!opts.keepHud) clearExpectHud();
     [...items.values()].filter((it) => !it.id.startsWith('mask-')).forEach(drop);
   }
   function list() { return [...items.keys()]; }
@@ -488,6 +676,7 @@
   window.__ann = {
     version: VERSION, config, box, circle, arrow, text, badge, highlight, blur, clear, list, mask,
     spotlight, bounds, cursorMove, cursorClick, cursorHide,
+    targetLabel, actionCallout, clearAction, expectHud, clearExpectHud,
   };
   return VERSION;
 })();

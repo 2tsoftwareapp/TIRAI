@@ -19,25 +19,48 @@ All required checks must be `ok`. Works on macOS, Linux and Windows; follow
 [references/setup.md](references/setup.md). The default driver needs no extension; only `driver: bsk` needs the user to install the BrowserSkill extension;
 never use `sudo` without asking.
 
-## 1. Write the scenario with the user
+## 1. Write the scenario with the user (Step-by-Step Evidence Methodology)
 
-Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thing to prove:
+Start from `tirai init scenarios/<name>.yaml` and fill it in. Follow the **step-by-step action + per-expect evidence standard**:
+
+1. **Always turn on step-by-step visual narration in `settings:`** so the viewer sees *every* click, edit, keypress, and verification live:
+   - `pace: human` — smooth 60fps virtual cursor glide, click ripples, and progressive typing.
+   - `camera: action` — automatically zooms in and pans smoothly from each action target (`click`, `fill`, `clear`, `select`, `press`, `download`) to the next, then eases back out to full view when expectations & results appear (pure verification/DB steps with `annotate:` still zoom into their annotations).
+   - `action_annotate: true` — draws a live callout pill + highlight box on **every** interactive action so the viewer knows exactly what is being clicked, cleared, typed, or submitted.
+   - `show_expects: true` — renders a live **EXPECTATIONS** checklist HUD card in the corner (`✓` PASS / `✗` FAIL + actual value on failure) and highlights each checked DOM target in green/red as each `expect:` runs one by one.
+   - `spotlight: true` — subtly dims the surrounding page during callouts and final annotations.
+2. **Write short, explicit `label:` on key actions and every `expect:`** (in the user's language, e.g. Vietnamese/Japanese/English) so the callout pills and per-expect checklist read like a real QA walkthrough rather than raw CSS selectors.
+3. **One step = one logical milestone** with explicit `expect:` checks AND final `annotate:` callouts on the resulting UI/DB/PDF/Excel state:
 
 ```yaml
-- id: S2
-  tab: app                       # which browser tab (declared under tabs:)
-  title: Invalid email format
-  subtitle: "Step 2: enter a malformed email -> validation error"
-  actions:                       # what to do
-    - fill: { selector: "#email", value: "alice-at-demo.local" }
-    - click: "button[type=submit]"
-  expect:                        # what must be true (required)
-    - text_contains: { selector: ".error", text: "Email format is invalid." }
-  annotate:                      # what to draw once expectations are checked
-    - box: { target: "#email" }
-    - arrow: { target: ".error", from: right, label: "Validation error" }
+settings:
+  pace: human
+  camera: action
+  camera_factor: 1.65
+  action_annotate: true
+  show_expects: true
+  spotlight: true
+  viewport: { width: 1600, height: 900 }
+
+steps:
+  - id: S2
+    tab: app                       # which browser tab (declared under tabs:)
+    title: Invalid email format
+    subtitle: "Step 2: enter a malformed email -> validation error"
+    actions:                       # each action gets live callout + smooth zoom
+      - clear: { selector: "@email", label: "Clear old email" }
+      - fill: { selector: "@email", value: "alice-at-demo.local", label: "Type invalid email" }
+      - click: { selector: "@submit", label: "Click Submit" }
+    expect:                        # each expect ticks off live in the EXPECTATIONS HUD
+      - text_contains: { selector: "@error", text: "Email format is invalid.", label: "Validation error shown" }
+      - attribute: { selector: "@email", name: "aria-invalid", equals: "true", label: "Email marked invalid" }
+    annotate:                      # final result callouts (HUD stays visible alongside them)
+      - box: { target: "@email", label: "Invalid input" }
+      - arrow: { target: "@error", from: right, label: "Error message" }
 ```
 
+- Override per action when needed: `{ selector: "@x", label: "...", annotate: false, zoom: 1.8 }` (or `zoom: false` to skip zooming on a minor action).
+- Override per step when needed: `action_annotate: false` or `show_expects: false` on dense setup/login steps.
 - Full vocabulary (actions, expect, DB tabs, databases): [references/scenario.md](references/scenario.md).
 - Annotation shapes, targets and animation: [references/annotations.md](references/annotations.md).
 - Name elements once under `targets:` and use `@name` in actions/expect/annotate/zoom (fallback locators like
@@ -60,7 +83,7 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. One step = one thi
   `settings.viewport: {width: 1600, height: 900}` when forms do not fit.
 - Selectors are CSS or TIRAI locators; Playwright syntax (`:has-text`, `>>`) does not work. Quote values that start
   with `${...}` or `{{...}}` inside `{ }`.
-- Video: `zoom: <selector>` on a step, `layout: split` to show UI and DB side by side; `subtitle: {en, vi}` + `--lang`.
+- Video: `camera: action` (or `zoom: <selector>` / `zoom: annotate`) on steps; `subtitle: {en, vi}` + `--lang`. **Do NOT use `layout: split`** (side-by-side UI + DB shrinks both panes and makes text unreadable; always record UI and DBX as separate full-screen steps with zoom + annotations).
 - Real data on screen: add `privacy: { mask: [email, phone, card, token] }` (and `keep:` for the record under test).
 - Secrets go in `${ENV_VAR}` only. Put values in a git-ignored `.env` next to the scenario
   (loaded automatically, or pass `--env-file`); never write values into the scenario.

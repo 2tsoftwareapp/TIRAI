@@ -157,6 +157,11 @@ class Runner:
         self.typing_delay = int(
             settings.get("typing_delay", 45 if self.pace == "human" else 75 if self.pace == "slow" else 0)
         )
+        self.action_annotate = bool(settings.get("action_annotate", False))
+        self.action_zoom = settings.get("action_zoom", False)
+        self.action_hold = float(settings.get("action_hold", 0.35))
+        self.show_expects = bool(settings.get("show_expects", False))
+        self.expect_pos = settings.get("expect_pos", "top-right")
         if self.record and self.pace != "fast" and self.cursor_glide and hasattr(self.b, "cursor"):
             self.b.cursor = False  # replace built-in teleporting cursor with smooth 60fps overlay cursor
 
@@ -315,7 +320,8 @@ class Runner:
         elif kind == "fill":
             self.human_fill(tab, arg["selector"], interpolate(arg["value"]))
         elif kind == "click":
-            self.b.click(tid, arg)
+            sel = arg["selector"] if isinstance(arg, dict) else arg
+            self.b.click(tid, sel)
             self.apply_privacy(tab)
             self.apply_single_tab(tab)
             self.pause(1.0)
@@ -344,10 +350,12 @@ class Runner:
             self.b.select(tid, arg["selector"], interpolate(arg["value"]))
             self.pause(0.5)
         elif kind == "hover":
-            self.b.hover(tid, arg)
+            sel = arg["selector"] if isinstance(arg, dict) else arg
+            self.b.hover(tid, sel)
             self.pause(0.5)
         elif kind == "scroll":
-            self.b.scroll_to(tid, arg)
+            sel = arg["selector"] if isinstance(arg, dict) else arg
+            self.b.scroll_to(tid, sel)
             self.pause(0.6)
         elif kind == "upload":
             files = arg["file"] if isinstance(arg["file"], list) else [arg["file"]]
@@ -360,9 +368,10 @@ class Runner:
             self.pause(1.0)
         elif kind == "clear":
             # Masked inputs (date pickers) keep their value on fill ""; select-all + delete works.
+            sel = arg["selector"] if isinstance(arg, dict) else arg
             mod = primary_modifier()
-            self.b.press(tid, f"{mod}+A", arg)
-            self.b.press(tid, "Backspace", arg)
+            self.b.press(tid, f"{mod}+A", sel)
+            self.b.press(tid, "Backspace", sel)
             self.pause(0.4)
         elif kind == "download":
             self.download(tab, arg)
@@ -564,8 +573,106 @@ class Runner:
                 return
         self.b.fill(tid, selector, val)
 
-    def tracked_action(self, tab, action, rec, follow):
-        """Run an action; when recording, note where it happened (camera follow) and long waits (fast-forward)."""
+    def _ann_theme_cfg(self):
+        cfg = {}
+        if self.theme.get("accent"):
+            cfg["color"] = self.theme["accent"]
+        if self.theme.get("label_font") or self.theme.get("font"):
+            cfg["labelFont"] = self.theme.get("label_font") or self.theme["font"]
+        if self.theme.get("cursor_color"):
+            cfg["cursorColor"] = self.theme["cursor_color"]
+        if self.theme.get("ripple_color"):
+            cfg["rippleColor"] = self.theme["ripple_color"]
+        if self.theme.get("spotlight_opacity") is not None:
+            cfg["spotlightOpacity"] = self.theme["spotlight_opacity"]
+        if self.theme.get("pass_color"):
+            cfg["passColor"] = self.theme["pass_color"]
+        if self.theme.get("fail_color"):
+            cfg["failColor"] = self.theme["fail_color"]
+        return cfg
+
+    def _friendly_target(self, tab, selector):
+        if not isinstance(selector, str) or not selector:
+            return ""
+        if not is_desktop(self.tabs[tab]):
+            try:
+                lbl = self.b.evaluate(
+                    self.tabs[tab],
+                    f"window.__ann&&__ann.targetLabel?__ann.targetLabel({js(selector)}):''",
+                )
+                if isinstance(lbl, str) and lbl.strip():
+                    return lbl.strip()
+            except DriverError:
+                pass
+        names = sorted(tg.used_in(selector))
+        if names:
+            return names[0].replace("_", " ")
+        return selector if len(selector) <= 28 else selector[:25] + "..."
+
+    def _action_label(self, tab, kind, arg, selector):
+        if isinstance(arg, dict) and arg.get("label"):
+            return str(arg["label"])
+        name = self._friendly_target(tab, selector) if isinstance(selector, str) else ""
+        if kind == "click":
+            return f"▶ Click: {name}" if name else "▶ Click"
+        if kind == "fill":
+            val = str(interpolate(arg["value"]))
+            try:
+                is_pw = bool(
+                    isinstance(selector, str)
+                    and not is_desktop(self.tabs[tab])
+                    and self.b.evaluate(
+                        self.tabs[tab],
+                        f"(()=>{{const e=document.querySelector({js(selector)});return !!(e&&e.type==='password')}})()",
+                    )
+                )
+            except DriverError:
+                is_pw = False
+            shown = "••••" if is_pw else (val if len(val) <= 24 else val[:21] + "...")
+            return f'✎ Input {name}: "{shown}"' if name else f'✎ Input: "{shown}"'
+        if kind == "clear":
+            return f"⌫ Clear: {name}" if name else "⌫ Clear"
+        if kind == "select":
+            val = str(interpolate(arg["value"]))
+            return f"▾ Select {name}: {val}" if name else f"▾ Select: {val}"
+        if kind == "press":
+            key = arg["key"] if isinstance(arg, dict) else arg
+            return f"⌨ Press {key}" + (f" ({name})" if name else "")
+        if kind == "hover":
+            return f"◎ Hover: {name}" if name else "◎ Hover"
+        if kind == "download":
+            return f"⬇ Download: {name}" if name else "⬇ Download"
+        if kind == "upload":
+            return f"⬆ Upload: {name}" if name else "⬆ Upload"
+        return f"{kind}: {name}" if name else kind
+
+    def _show_action_callout(self, tab, kind, arg, selector, spotlight=False):
+        if not self.record or is_desktop(self.tabs[tab]):
+            return None
+        cfg = self._ann_theme_cfg()
+        label = self._action_label(tab, kind, arg, selector)
+        color = (arg.get("color") if isinstance(arg, dict) else None) or self.theme.get("ripple_color", "#2563eb")
+        opts = {"color": color, "spotlight": bool(spotlight)}
+        calls = [f"__ann.config({js(cfg)})"] if cfg else []
+        tgt = selector if isinstance(selector, str) else None
+        calls.append(f"return __ann.actionCallout({js(tgt)},{js(label)},{js(opts)})")
+        try:
+            return self.page(tab, annotate_js() + ";(()=>{" + ";".join(calls) + "})()")
+        except DriverError:
+            return None
+
+    def _clear_action_callout(self, tab):
+        if not self.record or is_desktop(self.tabs[tab]):
+            return
+        try:
+            self.b.evaluate(self.tabs[tab], "window.__ann&&__ann.clearAction&&__ann.clearAction()")
+        except DriverError:
+            pass
+
+    def tracked_action(
+        self, tab, action, rec, follow, action_annotate=False, action_zoom=False, action_spotlight=False
+    ):
+        """Run an action; when recording, optionally annotate + zoom on each action and track long waits."""
         ((kind, arg),) = action.items()
         self.retarget(tab, tg.used_in(action))
         target = arg.get("selector") if isinstance(arg, dict) else arg
@@ -580,19 +687,30 @@ class Runner:
                     self.pause(0.4)
             except DriverError:
                 pass
+        interactive = kind in ("fill", "click", "select", "hover", "upload", "press", "clear", "download")
+        per_ann = arg.get("annotate") if isinstance(arg, dict) and "annotate" in arg else None
+        want_ann = self.record and interactive and (bool(per_ann) if per_ann is not None else bool(action_annotate))
+        per_zoom = arg.get("zoom") if isinstance(arg, dict) and "zoom" in arg else None
+        want_zoom = (
+            self.record and interactive and (bool(per_zoom) if per_zoom is not None else bool(follow or action_zoom))
+        )
         t0 = self.now()
-        if t0 is not None and follow:
-            target = arg.get("selector") if isinstance(arg, dict) else arg
-            if kind in ("fill", "click", "select", "hover", "scroll", "upload", "press") and isinstance(target, str):
-                rect = self.target_rect(tab, target)
-                if rect:
-                    rec.setdefault("camera", []).append({"t": t0, "rect": rect[:4], "viewport": rect[4:]})
+        if t0 is not None and want_zoom and isinstance(target, str):
+            rect = self.target_rect(tab, target)
+            if rect:
+                pt = {"t": t0, "rect": rect[:4], "viewport": rect[4:]}
+                if isinstance(per_zoom, (int, float)) and not isinstance(per_zoom, bool):
+                    pt["factor"] = float(per_zoom)
+                rec.setdefault("camera", []).append(pt)
+        if want_ann:
+            self._show_action_callout(tab, kind, arg, target if isinstance(target, str) else None, action_spotlight)
+            if self.action_hold > 0:
+                time.sleep(min(0.6, self.action_hold))
         if kind in ("click", "fill", "select", "hover", "clear", "download") and isinstance(target, str):
             self.glide_cursor(tab, target, click_ripple=kind in ("click", "fill", "select", "download"))
         try:
             self.do_action(tab, action)
         except DriverError as e:
-            target = arg.get("selector") if isinstance(arg, dict) else arg
             if (
                 kind in ("fill", "click", "select", "hover", "scroll", "upload", "press", "clear", "download")
                 and isinstance(target, str)
@@ -601,6 +719,11 @@ class Runner:
             ):
                 raise DriverError(f"{e}{self.nearby(tab, target)}") from None
             raise
+        finally:
+            if want_ann:
+                if self.action_hold > 0:
+                    time.sleep(min(0.3, self.action_hold * 0.6))
+                self._clear_action_callout(tab)
         if self.record and self.action_delay > 0 and kind not in ("wait", "wait_for", "eval", "dialog", "save"):
             time.sleep(self.action_delay)
         speed = float((self.sc.get("settings") or {}).get("fast_forward", 4))
@@ -763,23 +886,30 @@ class Runner:
     def check(self, tab, exp):
         ((kind, arg),) = exp.items()
         tid = self.tabs[tab]
+        label = arg.get("label") if isinstance(arg, dict) else None
         if kind == "db":
-            return self.check_db(arg)
+            res = self.check_db(arg)
+            return {**res, **({"label": label} if label else {})}
         if kind in ("pdf", "xlsx", "image"):
-            return self.check_file(kind, arg)
+            res = self.check_file(kind, arg)
+            return {**res, **({"label": label} if label else {})}
         if kind == "no_console_errors":
-            return self.check_console(tab, arg)
+            res = self.check_console(tab, arg)
+            return {**res, **({"label": label} if label else {})}
         if is_desktop(tid):
+            desk_arg = arg["selector"] if kind in ("visible", "not_visible") and isinstance(arg, dict) else arg
             deadline = time.time() + self.expect_timeout
             while True:
-                ok, actual = self.b.desk.check(tid, kind, arg)
+                ok, actual = self.b.desk.check(tid, kind, desk_arg)
                 if ok or time.time() > deadline:
-                    return {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok)}
+                    res = {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok)}
+                    return {**res, **({"label": label} if label else {})}
                 self.pause(0.5)
         q = "document.querySelector"
         if kind == "visible":
+            sel = arg["selector"] if isinstance(arg, dict) else arg
             expr = (
-                f"(()=>{{const e=document.querySelector({js(arg)});if(!e)return [false,'not found'];"
+                f"(()=>{{const e=document.querySelector({js(sel)});if(!e)return [false,'not found'];"
                 "const r=e.getBoundingClientRect();return [r.width>0&&r.height>0,'rect '+r.width+'x'+r.height]})()"
             )
         elif kind == "text_contains":
@@ -790,8 +920,9 @@ class Runner:
                 f"return [t.includes({js(arg['text'])}),t.slice(0,160)]}})()"
             )
         elif kind == "not_visible":
+            sel = arg["selector"] if isinstance(arg, dict) else arg
             expr = (
-                f"(()=>{{const e={q}({js(arg)});if(!e)return [true,'not found'];"
+                f"(()=>{{const e={q}({js(sel)});if(!e)return [true,'not found'];"
                 "const r=e.getBoundingClientRect();const s=getComputedStyle(e);"
                 "const hidden=r.width===0||r.height===0||s.visibility==='hidden'||s.display==='none';"
                 "return [hidden,'rect '+r.width+'x'+r.height]})()"
@@ -836,7 +967,8 @@ class Runner:
                 "{matched: m.slice(-5).map(fmt), recent: es.slice(-12).map(fmt)}]})()"
             )
         elif kind == "url_contains":
-            expr = f"[location.href.includes({js(arg)}),location.href]"
+            needle = arg["text"] if isinstance(arg, dict) else arg
+            expr = f"[location.href.includes({js(needle)}),location.href]"
         else:
             raise ValueError(f"unknown expect {kind}")
         deadline = time.time() + self.expect_timeout
@@ -853,7 +985,7 @@ class Runner:
             else:
                 sel = arg if isinstance(arg, str) else arg.get("selector", "")
                 actual += self.nearby(tab, sel)
-        return {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok)}
+        return {"type": kind, "expected": arg, "actual": actual, "ok": bool(ok), **({"label": label} if label else {})}
 
     def console_cursor(self, tab):
         try:
@@ -935,24 +1067,90 @@ class Runner:
         except DriverError:
             pass
 
-    def annotate(self, tab, items, spotlight=False):
+    def _expect_selector(self, kind, arg):
+        if kind in ("visible", "not_visible"):
+            return arg["selector"] if isinstance(arg, dict) else arg
+        if kind in ("value", "attribute", "count", "text_contains", "text_matches") and isinstance(arg, dict):
+            return arg.get("selector")
+        return None
+
+    def _format_expect_row(self, tab, exp, res):
+        ((kind, arg),) = exp.items()
+        ok = bool(res.get("ok"))
+        label = res.get("label") or (arg.get("label") if isinstance(arg, dict) else None)
+        if not label:
+            sel = self._expect_selector(kind, arg)
+            name = self._friendly_target(tab, sel) if sel else ""
+            if kind == "visible":
+                label = f"Visible: {name}" if name else "Visible"
+            elif kind == "not_visible":
+                label = f"Hidden: {name}" if name else "Hidden"
+            elif kind == "value":
+                label = f'{name} == "{arg.get("equals")}"'
+            elif kind == "text_contains":
+                txt = str(arg.get("text", ""))
+                txt = txt if len(txt) <= 28 else txt[:25] + "..."
+                label = f'{name} contains "{txt}"' if name else f'Text contains "{txt}"'
+            elif kind == "text_matches":
+                label = f"{name} matches /{arg.get('pattern')}/" if name else f"Text matches /{arg.get('pattern')}/"
+            elif kind == "attribute":
+                label = f'{name}[{arg.get("name")}] == "{arg.get("equals")}"'
+            elif kind == "count":
+                label = f"Count({name}) == {arg.get('equals')}"
+            elif kind == "url_contains":
+                needle = arg["text"] if isinstance(arg, dict) else arg
+                label = f'URL contains "{needle}"'
+            elif kind == "request":
+                st, url = arg.get("status"), arg.get("url_contains")
+                label = f"HTTP {st} {url}" if st is not None else f"Request {url}"
+            elif kind == "db":
+                n = len(arg.get("rows") or [])
+                label = f"DB rows matched ({n} row{'s' if n != 1 else ''})"
+            elif kind in ("pdf", "xlsx", "image"):
+                label = f"{kind.upper()}: {Path(str(arg.get('path', ''))).name}"
+            elif kind == "no_console_errors":
+                label = "No console errors"
+            else:
+                label = kind
+        detail = ""
+        if not ok:
+            act = res.get("actual")
+            s = json.dumps(act, ensure_ascii=False) if isinstance(act, (dict, list)) else str(act)
+            detail = f"actual: {s if len(s) <= 72 else s[:69] + '...'}"
+        return {"ok": ok, "label": str(label), **({"detail": detail} if detail else {})}
+
+    def _show_expect_result(self, tab, hud_rows, exp, res, idx):
+        if not self.record or is_desktop(self.tabs[tab]):
+            return
+        ((kind, arg),) = exp.items()
+        row = self._format_expect_row(tab, exp, res)
+        hud_rows.append(row)
+        cfg = self._ann_theme_cfg()
+        pass_c = self.theme.get("pass_color", "#16a34a")
+        fail_c = self.theme.get("fail_color", "#dc2626")
+        calls = [f"__ann.config({js(cfg)})"] if cfg else []
+        sel = self._expect_selector(kind, arg)
+        if sel and kind != "not_visible":
+            box_c = pass_c if res.get("ok") else fail_c
+            calls.append(
+                f"try{{__ann.box({js(sel)},{{id:{js(f'__exp-{idx}')},color:{js(box_c)},width:3,padding:4,anim:'fade',duration:180}})}}catch(_){{}}"
+            )
+        hud_opts = {"pos": self.expect_pos, "passColor": pass_c, "failColor": fail_c}
+        calls.append(f"__ann.expectHud({js(hud_rows)},{js(hud_opts)})")
+        try:
+            self.page(tab, annotate_js() + ";(()=>{" + ";".join(calls) + ";return true})()")
+            time.sleep(0.24)
+        except DriverError:
+            pass
+
+    def annotate(self, tab, items, spotlight=False, keep_hud=False):
         if is_desktop(self.tabs[tab]):
             if items:
                 raise ScenarioError("annotate: is only available on browser tabs")
             return []
-        cfg = {}
-        if self.theme.get("accent"):
-            cfg["color"] = self.theme["accent"]
-        if self.theme.get("label_font") or self.theme.get("font"):
-            cfg["labelFont"] = self.theme.get("label_font") or self.theme["font"]
-        if self.theme.get("cursor_color"):
-            cfg["cursorColor"] = self.theme["cursor_color"]
-        if self.theme.get("ripple_color"):
-            cfg["rippleColor"] = self.theme["ripple_color"]
-        if self.theme.get("spotlight_opacity") is not None:
-            cfg["spotlightOpacity"] = self.theme["spotlight_opacity"]
+        cfg = self._ann_theme_cfg()
         calls = [f"__ann.config({js(cfg)})"] if cfg else []
-        calls.append("__ann.clear()")
+        calls.append("__ann.clear(undefined,{keepHud:true})" if keep_hud else "__ann.clear()")
         for item in items or []:
             ((kind, a),) = item.items()
             a = dict(a) if isinstance(a, dict) else {"target": a}
@@ -1108,43 +1306,87 @@ class Runner:
                 mark = self.diag_start(tab)
                 self.apply_privacy(tab)
                 self.apply_single_tab(tab)
-                follow = step.get("zoom") == "follow" or (not step.get("zoom") and self.camera == "follow")
+                zoom_spec = step.get("zoom")
+                is_action_cam = (
+                    zoom_spec == "action"
+                    or (isinstance(zoom_spec, dict) and zoom_spec.get("mode") == "action")
+                    or (not zoom_spec and (self.camera == "action" or bool(self.action_zoom)))
+                )
+                follow = zoom_spec == "follow" or (not zoom_spec and self.camera == "follow") or is_action_cam
+                step_act_ann = (
+                    bool(step["action_annotate"]) if step.get("action_annotate") is not None else self.action_annotate
+                )
+                step_show_exp = (
+                    bool(step["show_expects"]) if step.get("show_expects") is not None else self.show_expects
+                )
+                spot = step.get("spotlight")
+                if spot is None:
+                    spot = bool(self.settings.get("spotlight", False))
+                hud_rows = []
                 halted = False
                 for action in step.get("actions", []):
                     if "expect" in action:
                         # A check between actions, e.g. before a tab switch unmounts what it looks at.
                         for exp in _listify(action["expect"]):
-                            rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
+                            rexp = render(exp, self.vars, strict=True)
+                            cres = self.check(tab, rexp)
+                            rec["checks"].append(cres)
+                            if step_show_exp:
+                                self._show_expect_result(tab, hud_rows, rexp, cres, len(rec["checks"]))
                         if not all(c["ok"] for c in rec["checks"]):
                             halted = True
                             break
                         continue
-                    self.tracked_action(tab, render(action, self.vars, strict=True), rec, follow)
+                    self.tracked_action(
+                        tab,
+                        render(action, self.vars, strict=True),
+                        rec,
+                        follow,
+                        action_annotate=step_act_ann,
+                        action_zoom=is_action_cam,
+                        action_spotlight=bool(spot),
+                    )
                     self.apply_privacy(tab)
                     self.apply_single_tab(tab)
+                expect_t = self.now()
                 if not halted:
                     for x in _listify(step.get("save")):
                         self.save(tab, render(x, self.vars, strict=True))
                     for exp in step.get("expect", []):
-                        rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
+                        rexp = render(exp, self.vars, strict=True)
+                        cres = self.check(tab, rexp)
+                        rec["checks"].append(cres)
+                        if step_show_exp:
+                            self._show_expect_result(tab, hud_rows, rexp, cres, len(rec["checks"]))
                 self.diag_end(tab, mark, rec)
                 rec["status"] = "passed" if all(c["ok"] for c in rec["checks"]) else "failed"
                 ann_t = self.now()
-                spot = step.get("spotlight")
-                if spot is None:
-                    spot = bool(self.settings.get("spotlight", False))
                 if step.get("annotate"):
                     rec["annotations"] = self.annotate(
-                        tab, render(step["annotate"], self.vars, strict=True), spotlight=bool(spot)
+                        tab,
+                        render(step["annotate"], self.vars, strict=True),
+                        spotlight=bool(spot),
+                        keep_hud=bool(self.record and step_show_exp and hud_rows),
                     )
-                zoom_spec = step.get("zoom")
                 is_ann_zoom = (
                     zoom_spec == "annotate"
                     or (isinstance(zoom_spec, dict) and zoom_spec.get("mode") == "annotate")
                     or (not zoom_spec and self.camera == "annotate" and bool(step.get("annotate")))
+                    or (is_action_cam and not rec.get("camera") and bool(step.get("annotate")))
                 )
                 if follow and rec.get("camera"):
-                    rec["zoom"] = {"follow": rec.pop("camera"), **({"factor": self.camera_factor})}
+                    cam_pts = rec.pop("camera")
+                    default_factor = (
+                        float(self.action_zoom)
+                        if isinstance(self.action_zoom, (int, float)) and not isinstance(self.action_zoom, bool)
+                        else self.camera_factor
+                    )
+                    zcfg = zoom_spec if isinstance(zoom_spec, dict) else {}
+                    rec["zoom"] = {
+                        "follow": cam_pts,
+                        "factor": float(zcfg.get("factor", default_factor)),
+                        **({"out": True, "out_at": expect_t} if is_action_cam and expect_t is not None else {}),
+                    }
                 elif is_ann_zoom and step.get("annotate") and not is_desktop(self.tabs[tab]):
                     time.sleep(0.12)
                     try:
@@ -1163,7 +1405,7 @@ class Runner:
                             "out": zcfg.get("out", True),
                             **({k: zcfg[k] for k in ("in", "out_duration") if k in zcfg}),
                         }
-                elif zoom_spec and zoom_spec not in ("follow", "annotate"):
+                elif zoom_spec and zoom_spec not in ("follow", "annotate", "action"):
                     rec["zoom"] = self.zoom_rect(tab, render(zoom_spec, self.vars, strict=True))
             except (DriverError, ScenarioError, KeyError, ValueError, RuntimeError) as e:
                 rec["status"], rec["error"] = "error", str(e)
