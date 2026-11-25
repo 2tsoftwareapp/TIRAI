@@ -720,10 +720,8 @@ class Runner:
                 raise DriverError(f"{e}{self.nearby(tab, target)}") from None
             raise
         finally:
-            if want_ann:
-                if self.action_hold > 0:
-                    time.sleep(min(0.3, self.action_hold * 0.6))
-                self._clear_action_callout(tab)
+            if want_ann and self.action_hold > 0:
+                time.sleep(min(0.22, self.action_hold * 0.5))
         if self.record and self.action_delay > 0 and kind not in ("wait", "wait_for", "eval", "dialog", "save"):
             time.sleep(self.action_delay)
         speed = float((self.sc.get("settings") or {}).get("fast_forward", 4))
@@ -1348,6 +1346,8 @@ class Runner:
                     )
                     self.apply_privacy(tab)
                     self.apply_single_tab(tab)
+                if step_act_ann:
+                    self._clear_action_callout(tab)
                 expect_t = self.now()
                 if not halted:
                     for x in _listify(step.get("save")):
@@ -1376,10 +1376,13 @@ class Runner:
                 )
                 if follow and rec.get("camera"):
                     cam_pts = rec.pop("camera")
+                    raw_cf = (self.sc.get("settings") or {}).get("camera_factor")
                     default_factor = (
                         float(self.action_zoom)
                         if isinstance(self.action_zoom, (int, float)) and not isinstance(self.action_zoom, bool)
-                        else self.camera_factor
+                        else float(raw_cf)
+                        if raw_cf is not None
+                        else (1.35 if is_action_cam else self.camera_factor)
                     )
                     zcfg = zoom_spec if isinstance(zoom_spec, dict) else {}
                     rec["zoom"] = {

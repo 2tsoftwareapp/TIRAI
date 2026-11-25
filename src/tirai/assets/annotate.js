@@ -25,7 +25,7 @@
  * Every call returns the annotation id. Missing targets throw.
  */
 (() => {
-  const VERSION = '0.5.0';
+  const VERSION = '0.6.0';
   if (window.__ann && window.__ann.version === VERSION) return VERSION;
   document.getElementById('__ann_host')?.remove();
   const CFG = {
@@ -50,9 +50,16 @@
     svg.ann-canvas{position:fixed;inset:0;width:100vw;height:100vh;overflow:visible}
     .lbl{position:fixed;font:600 15px/1.3 var(--ann-font,system-ui,'Segoe UI',sans-serif);color:#fff;padding:6px 10px;border-radius:6px;
          box-shadow:0 2px 8px #0005;white-space:pre-wrap;max-width:360px}
-    .act-pill{position:fixed;display:inline-flex;align-items:center;gap:6px;font:700 14px/1.25 var(--ann-font,system-ui,'Segoe UI',sans-serif);
-              color:#fff;padding:6px 12px;border-radius:999px;box-shadow:0 4px 14px rgba(15,23,42,.38);border:1.5px solid rgba(255,255,255,.35);
-              white-space:nowrap;max-width:380px;overflow:hidden;text-overflow:ellipsis;z-index:11}
+    .act-box{position:fixed;border:3px solid #2563eb;border-radius:8px;box-shadow:0 0 0 3px rgba(37,99,235,.18),0 4px 14px rgba(15,23,42,.18);
+             background:rgba(37,99,235,.04);pointer-events:none;z-index:10;opacity:0;
+             transition:left 280ms cubic-bezier(.22,.8,.24,1),top 280ms cubic-bezier(.22,.8,.24,1),
+                        width 280ms cubic-bezier(.22,.8,.24,1),height 280ms cubic-bezier(.22,.8,.24,1),
+                        opacity 220ms ease,border-color 220ms ease}
+    .act-pill{position:fixed;display:inline-flex;align-items:center;gap:6px;font:700 13.5px/1.25 var(--ann-font,system-ui,'Segoe UI',sans-serif);
+              color:#fff;padding:6px 12px;border-radius:999px;box-shadow:0 4px 14px rgba(15,23,42,.34);border:1.5px solid rgba(255,255,255,.35);
+              white-space:nowrap;max-width:380px;overflow:hidden;text-overflow:ellipsis;z-index:11;opacity:0;
+              transition:left 280ms cubic-bezier(.22,.8,.24,1),top 280ms cubic-bezier(.22,.8,.24,1),
+                         opacity 220ms ease,background-color 220ms ease}
     .exp-hud{position:fixed;width:370px;max-width:calc(100vw - 28px);max-height:calc(100vh - 36px);overflow:hidden;
              background:rgba(15,23,42,.92);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
              color:#f8fafc;border:1px solid rgba(255,255,255,.15);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.42);
@@ -457,37 +464,71 @@
     }
   }
 
+  let actBoxEl = null;
   let actPillEl = null;
   function clearAction() {
-    clear('__act-box');
+    if (actBoxEl) {
+      const oldBox = actBoxEl;
+      actBoxEl = null;
+      if (reduced()) oldBox.remove();
+      else {
+        oldBox.style.opacity = '0';
+        setTimeout(() => oldBox.remove(), 240);
+      }
+    }
     if (actPillEl) {
-      const old = actPillEl;
+      const oldPill = actPillEl;
       actPillEl = null;
-      if (reduced()) old.remove();
-      else old.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 140, fill: 'forwards' }).onfinish = () => old.remove();
+      if (reduced()) oldPill.remove();
+      else {
+        oldPill.style.opacity = '0';
+        setTimeout(() => oldPill.remove(), 240);
+      }
     }
     if (spotEl && spotEl.getAttribute('data-act-spot') === '1') clearSpotlight();
     return true;
   }
   function actionCallout(target, label, o = {}) {
     mount();
-    clearAction();
     const color = o.color || CFG.rippleColor || '#2563eb';
     let b = null;
     if (target) {
       try {
-        box(target, { id: '__act-box', color, width: 3.5, padding: 6, anim: 'fade', duration: 180 });
-        const it = items.get('__act-box');
-        b = it && it._lastBox;
+        const rectOf = resolveTarget(target);
+        b = pad(rectOf(), 6);
       } catch (_) {}
     }
+    if (b && b.w > 0 && b.h > 0) {
+      const isNew = !actBoxEl || !actBoxEl.isConnected;
+      if (isNew) {
+        actBoxEl = document.createElement('div');
+        actBoxEl.className = 'act-box';
+        if (reduced()) actBoxEl.style.transition = 'none';
+        root.appendChild(actBoxEl);
+      }
+      actBoxEl.style.borderColor = color;
+      actBoxEl.style.left = `${b.x}px`;
+      actBoxEl.style.top = `${b.y}px`;
+      actBoxEl.style.width = `${b.w}px`;
+      actBoxEl.style.height = `${b.h}px`;
+      if (isNew) {
+        actBoxEl.getBoundingClientRect();
+      }
+      actBoxEl.style.opacity = '1';
+    } else if (actBoxEl) {
+      actBoxEl.style.opacity = '0';
+    }
     if (label) {
-      const pill = document.createElement('div');
-      pill.className = 'act-pill';
-      pill.style.background = color;
-      pill.textContent = String(label);
-      root.appendChild(pill);
-      const pw = pill.offsetWidth, ph = pill.offsetHeight;
+      const isNew = !actPillEl || !actPillEl.isConnected;
+      if (isNew) {
+        actPillEl = document.createElement('div');
+        actPillEl.className = 'act-pill';
+        if (reduced()) actPillEl.style.transition = 'none';
+        root.appendChild(actPillEl);
+      }
+      actPillEl.style.background = color;
+      actPillEl.textContent = String(label);
+      const pw = actPillEl.offsetWidth, ph = actPillEl.offsetHeight;
       let px, py;
       if (b && b.w > 0 && b.h > 0) {
         px = b.x + b.w / 2 - pw / 2;
@@ -499,14 +540,14 @@
       }
       px = Math.max(8, Math.min(px, innerWidth - pw - 8));
       py = Math.max(8, Math.min(py, innerHeight - ph - 8));
-      pill.style.left = `${px}px`;
-      pill.style.top = `${py}px`;
-      if (!reduced()) pill.animate([{ opacity: 0, transform: 'translateY(4px) scale(.96)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: CFG.ease, fill: 'backwards' });
-      actPillEl = pill;
-    }
-    if (o.spotlight && b) {
-      spotlight(typeof o.spotlight === 'number' ? o.spotlight : Math.min(0.24, CFG.spotlightOpacity));
-      if (spotEl) spotEl.setAttribute('data-act-spot', '1');
+      actPillEl.style.left = `${px}px`;
+      actPillEl.style.top = `${py}px`;
+      if (isNew) {
+        actPillEl.getBoundingClientRect();
+      }
+      actPillEl.style.opacity = '1';
+    } else if (actPillEl) {
+      actPillEl.style.opacity = '0';
     }
     return b ? [b.x, b.y, b.w, b.h, innerWidth, innerHeight] : null;
   }

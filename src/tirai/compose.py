@@ -247,42 +247,52 @@ def title_card(tmp, out, seconds, frame, tl=None):
     )
 
 
+def _smootherstep(u: str) -> str:
+    """Quintic smootherstep 6u^5 - 15u^4 + 10u^3: zero velocity & zero acceleration at endpoints."""
+    return f"({u}*{u}*{u}*({u}*(6*{u}-15)+10))"
+
+
 def follow_filter(z, seg_size, clip_start, clip_dur=None):
-    """Zoom in and pan from one action target to the next (`zoom: follow`/`action`), with optional smooth zoom-out."""
+    """Zoom in and pan smoothly across action targets (`zoom: follow`/`action`), with optional smooth zoom-out."""
     sw, sh = seg_size
-    pts = []
+    raw_pts = []
     for p in z["follow"]:
         x, y, w, h = p["rect"]
         vw, vh = p["viewport"]
         sx, sy = sw / max(vw, 1), sh / max(vh, 1)
-        pts.append((max(0.0, p["t"] - clip_start), (x + w / 2) * sx * 2, (y + h / 2) * sy * 2))
-    if not pts:
+        raw_pts.append((max(0.0, p["t"] - clip_start), (x + w / 2) * sx * 2, (y + h / 2) * sy * 2))
+    if not raw_pts:
         return ""
-    factor = max(1.0, float(z.get("factor", 1.6)))
+    # Drop micro-jitter waypoints within ~160px of the previous camera center so adjacent fields stay calm.
+    pts = [raw_pts[0]]
+    for pt in raw_pts[1:]:
+        if ((pt[1] - pts[-1][1]) ** 2 + (pt[2] - pts[-1][2]) ** 2) ** 0.5 >= 320.0:
+            pts.append(pt)
+    factor = max(1.0, float(z.get("factor", 1.35)))
     T = f"(on/{FPS})"
 
     def track(i):
-        # p0 + sum (p_k - p_{k-1}) * smoothstep over 0.6s starting at t_k: pans as each action happens.
+        # Smooth quintic pan over 0.9s between distinct action regions.
         expr = f"{pts[0][i]:.1f}"
         for (t, *c), (_, *prev) in zip(pts[1:], pts[:-1], strict=True):
-            u = f"clip(({T}-{t - 0.3:.3f})/0.6,0,1)"
-            expr += f"+({c[i - 1] - prev[i - 1]:.1f})*{u}*{u}*(3-2*{u})"
+            u = f"clip(({T}-{t - 0.35:.3f})/0.90,0,1)"
+            expr += f"+({c[i - 1] - prev[i - 1]:.1f})*{_smootherstep(u)}"
         return expr
 
-    in_at = max(0.0, pts[0][0] - 0.5)
-    u = f"clip(({T}-{in_at:.3f})/0.6,0,1)"
-    ease_in = f"({u}*{u}*(3-2*{u}))"
+    in_at = max(0.0, pts[0][0] - 0.55)
+    u = f"clip(({T}-{in_at:.3f})/0.80,0,1)"
+    ease_in = _smootherstep(u)
     if z.get("out"):
-        out_s = max(0.15, float(z.get("out_duration", 0.55)))
+        out_s = max(0.25, float(z.get("out_duration", 0.75)))
         if z.get("out_at") is not None:
-            out_at = max(in_at + 0.65, float(z["out_at"]) - clip_start)
+            out_at = max(in_at + 0.85, float(z["out_at"]) - clip_start)
         elif clip_dur is not None:
-            out_at = max(in_at + 0.65, clip_dur - out_s - 0.15)
+            out_at = max(in_at + 0.85, clip_dur - out_s - 0.2)
         else:
             out_at = None
         if out_at is not None and (clip_dur is None or out_at < clip_dur - 0.05):
             u_out = f"clip(({T}-{out_at:.3f})/{out_s:.3f},0,1)"
-            ease = f"({ease_in}*(1-{u_out}*{u_out}*(3-2*{u_out})))"
+            ease = f"({ease_in}*(1-{_smootherstep(u_out)}))"
         else:
             ease = ease_in
     else:
@@ -363,15 +373,15 @@ def zoom_filter(step, seg_size, clip_start=0.0, clip_dur=None):
     if factor <= 1.01:
         return ""
     at = float(z.get("at", 0.4))
-    in_s = max(0.15, float(z.get("in", 0.6)))
+    in_s = max(0.2, float(z.get("in", 0.75)))
     T = f"(on/{FPS})"
     u_in = f"clip(({T}-{at:.3f})/{in_s:.3f},0,1)"
-    ease_in = f"({u_in}*{u_in}*(3-2*{u_in}))"
+    ease_in = _smootherstep(u_in)
     if z.get("out") and clip_dur is not None and clip_dur > at + in_s + 0.35:
-        out_s = max(0.15, float(z.get("out_duration", 0.55)))
+        out_s = max(0.2, float(z.get("out_duration", 0.70)))
         out_at = max(at + in_s + 0.25, clip_dur - out_s - 0.15)
         u_out = f"clip(({T}-{out_at:.3f})/{out_s:.3f},0,1)"
-        ease = f"({ease_in}*(1-{u_out}*{u_out}*(3-2*{u_out})))"
+        ease = f"({ease_in}*(1-{_smootherstep(u_out)}))"
     else:
         ease = ease_in
     zoom = f"1+{factor - 1:.3f}*{ease}"
@@ -403,10 +413,15 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
         for a, b, s in shown
     )
     eff_dur = max(0.2, dur - saved)
+    fade = (
+        f"fade=t=in:st=0:d=0.16:color={bg},fade=t=out:st={max(0.1, eff_dur - 0.16):.3f}:d=0.16:color={bg},"
+        if eff_dur >= 0.6
+        else ""
+    )
     cut = (
         f"fps={FPS},tpad=stop_mode=clone:stop_duration=10,"
         f"trim=start={start:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,"
-        f"{zoom_filter(step, video_size(seg), start, clip_dur=eff_dur)}{ff_filter}{badges}"
+        f"{zoom_filter(step, video_size(seg), start, clip_dur=eff_dur)}{ff_filter}{badges}{fade}"
     )
     dur -= saved
     # The header text is burned by the subtitles pass (ASS); the clip only draws the bar and badge.

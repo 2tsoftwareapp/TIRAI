@@ -7,7 +7,7 @@ name: "My feature evidence"
 settings:
   pace: human
   camera: action
-  camera_factor: 1.65
+  camera_factor: 1.35
   action_annotate: true
   show_expects: true
   spotlight: true
