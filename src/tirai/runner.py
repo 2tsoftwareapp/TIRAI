@@ -6,6 +6,7 @@ record:  same flow, one MP4 per contiguous tab block, plus timeline.json for `ti
 
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -141,11 +142,23 @@ class Runner:
         self.segments = []
         self.seg = None
         self.downloads = []
+        self.previews = []
         self._step_id = None
         settings = scenario.get("settings") or {}
         self.timing = float(os.environ.get("TIRAI_TIMING_SCALE") or settings.get("timing_scale", 1.0))
         self.expect_timeout = float(os.environ.get("TIRAI_EXPECT_TIMEOUT") or settings.get("expect_timeout", 6))
         self.settings = settings
+        self.theme = {**(scenario.get("theme") or {}), **(settings.get("theme") or {})}
+        self.pace = settings.get("pace", "fast")
+        self.cursor_glide = bool(settings.get("cursor_glide", self.pace in ("human", "slow")))
+        self.action_delay = float(
+            settings.get("action_delay", 0.28 if self.pace == "human" else 0.55 if self.pace == "slow" else 0.0)
+        )
+        self.typing_delay = int(
+            settings.get("typing_delay", 45 if self.pace == "human" else 75 if self.pace == "slow" else 0)
+        )
+        if self.record and self.pace != "fast" and self.cursor_glide and hasattr(self.b, "cursor"):
+            self.b.cursor = False  # replace built-in teleporting cursor with smooth 60fps overlay cursor
 
     def pause(self, seconds):
         """Settle delay after UI actions; scale with TIRAI_TIMING_SCALE / settings.timing_scale on slow machines."""
@@ -300,7 +313,7 @@ class Runner:
             self.apply_single_tab(tab)
             self.pause(1.0)
         elif kind == "fill":
-            self.b.fill(tid, arg["selector"], interpolate(arg["value"]))
+            self.human_fill(tab, arg["selector"], interpolate(arg["value"]))
         elif kind == "click":
             self.b.click(tid, arg)
             self.apply_privacy(tab)
@@ -496,6 +509,61 @@ class Runner:
         hits = [h for h in hits if isinstance(h, str)] if isinstance(hits, list) else []
         return f"; nearby: {', '.join(hits)}" if hits else ""
 
+    def glide_cursor(self, tab, selector, click_ripple=False):
+        """Smoothly glide the 60fps virtual cursor to `selector` center when recording in human/slow pace."""
+        if not (self.record and self.cursor_glide and isinstance(selector, str)) or is_desktop(self.tabs[tab]):
+            return
+        rect = self.target_rect(tab, selector)
+        if not rect:
+            return
+        cx, cy = rect[0] + rect[2] / 2, rect[1] + rect[3] / 2
+        glide_ms = 420 if self.pace == "human" else 650
+        cur_c = self.theme.get("cursor_color", "#111827")
+        rpl_c = self.theme.get("ripple_color", "#2563eb")
+        try:
+            dur = self.b.evaluate(
+                self.tabs[tab],
+                annotate_js() + f";__ann.cursorMove({cx:.1f},{cy:.1f},{glide_ms},{js(cur_c)})",
+            )
+            if isinstance(dur, (int, float)) and dur > 0:
+                time.sleep(min(0.8, (dur + 40) / 1000.0))
+            if click_ripple:
+                self.b.evaluate(self.tabs[tab], f"window.__ann&&__ann.cursorClick({cx:.1f},{cy:.1f},{js(rpl_c)})")
+                time.sleep(0.14)
+        except DriverError:
+            pass
+
+    def human_fill(self, tab, selector, value):
+        """Progressive chunked typing for simple ASCII values when recording in human/slow pace."""
+        tid = self.tabs[tab]
+        val = str(value)
+        if (
+            self.record
+            and self.pace != "fast"
+            and hasattr(self.b, "type_text")
+            and 1 <= len(val) <= 32
+            and val.isascii()
+            and val.isprintable()
+            and "/" not in val
+        ):
+            try:
+                is_pw = self.b.evaluate(
+                    tid,
+                    f"(()=>{{const e=document.querySelector({js(selector)});return !!(e&&e.type==='password')}})()",
+                )
+            except DriverError:
+                is_pw = True
+            if not is_pw:
+                self.b.fill(tid, selector, "")
+                step = max(1, (len(val) + 6) // 7)  # at most ~7 chunks for smooth visible typing
+                for i in range(0, len(val), step):
+                    chunk = val[i : i + step]
+                    self.b.type_text(tid, selector, chunk)
+                    if self.typing_delay > 0:
+                        time.sleep(min(0.18, self.typing_delay * len(chunk) / 1000.0))
+                return
+        self.b.fill(tid, selector, val)
+
     def tracked_action(self, tab, action, rec, follow):
         """Run an action; when recording, note where it happened (camera follow) and long waits (fast-forward)."""
         ((kind, arg),) = action.items()
@@ -519,6 +587,8 @@ class Runner:
                 rect = self.target_rect(tab, target)
                 if rect:
                     rec.setdefault("camera", []).append({"t": t0, "rect": rect[:4], "viewport": rect[4:]})
+        if kind in ("click", "fill", "select", "hover", "clear", "download") and isinstance(target, str):
+            self.glide_cursor(tab, target, click_ripple=kind in ("click", "fill", "select", "download"))
         try:
             self.do_action(tab, action)
         except DriverError as e:
@@ -531,6 +601,8 @@ class Runner:
             ):
                 raise DriverError(f"{e}{self.nearby(tab, target)}") from None
             raise
+        if self.record and self.action_delay > 0 and kind not in ("wait", "wait_for", "eval", "dialog", "save"):
+            time.sleep(self.action_delay)
         speed = float((self.sc.get("settings") or {}).get("fast_forward", 4))
         if t0 is not None and kind in ("wait", "wait_for") and speed > 1 and (t1 := self.now()) - t0 >= 1.5:
             rec.setdefault("idle", []).append([round(t0 + 0.3, 3), round(t1 - 0.2, 3), speed])
@@ -579,7 +651,8 @@ class Runner:
         )
         if not rect:
             raise ScenarioError(f"zoom target not found: {z['target']}")
-        return {"rect": rect[:4], "viewport": rect[4:], **{k: z[k] for k in ("factor", "at") if k in z}}
+        extra = {k: z[k] for k in ("factor", "at", "in", "out", "out_duration") if k in z}
+        return {"rect": rect[:4], "viewport": rect[4:], **extra}
 
     def dbx_sql(self, tab, sql):
         tid = self.tabs[tab]
@@ -647,15 +720,52 @@ class Runner:
         from tirai import filescheck
 
         path = self.resolve_file(arg["path"], kind)
-        fn = filescheck.check_pdf if kind == "pdf" else filescheck.check_xlsx
-        return fn(path, arg)
+        fn = (
+            filescheck.check_pdf
+            if kind == "pdf"
+            else filescheck.check_xlsx
+            if kind == "xlsx"
+            else filescheck.check_image
+        )
+        res = fn(path, arg)
+        want_preview = arg.get("preview")
+        if want_preview is None:
+            want_preview = bool(arg.get("annotate"))
+        if want_preview:
+            try:
+                rel = str(path.resolve().relative_to(self.out.resolve()))
+            except ValueError:
+                pdir = self.out / "previews"
+                pdir.mkdir(parents=True, exist_ok=True)
+                dest = pdir / path.name
+                if dest.resolve() != path.resolve():
+                    shutil.copyfile(path, dest)
+                rel = str(dest.relative_to(self.out))
+            self.previews.append(
+                {
+                    "step": self._step_id,
+                    "kind": kind,
+                    "file": path.name,
+                    "path": rel,
+                    "ok": bool(res.get("ok")),
+                    "contains": arg.get("contains"),
+                    "annotate": arg.get("annotate"),
+                    "zoom": arg.get("zoom", bool(arg.get("annotate"))),
+                    "spotlight": arg.get("spotlight", self.settings.get("spotlight", False)),
+                    "hold": arg.get("hold"),
+                    "title": arg.get("title"),
+                    "subtitle": arg.get("subtitle"),
+                    **({k: arg[k] for k in ("sheet", "max_rows", "max_cols") if k in arg}),
+                }
+            )
+        return res
 
     def check(self, tab, exp):
         ((kind, arg),) = exp.items()
         tid = self.tabs[tab]
         if kind == "db":
             return self.check_db(arg)
-        if kind in ("pdf", "xlsx"):
+        if kind in ("pdf", "xlsx", "image"):
             return self.check_file(kind, arg)
         if kind == "no_console_errors":
             return self.check_console(tab, arg)
@@ -825,12 +935,24 @@ class Runner:
         except DriverError:
             pass
 
-    def annotate(self, tab, items):
+    def annotate(self, tab, items, spotlight=False):
         if is_desktop(self.tabs[tab]):
             if items:
                 raise ScenarioError("annotate: is only available on browser tabs")
             return []
-        calls = ["__ann.clear()"]
+        cfg = {}
+        if self.theme.get("accent"):
+            cfg["color"] = self.theme["accent"]
+        if self.theme.get("label_font") or self.theme.get("font"):
+            cfg["labelFont"] = self.theme.get("label_font") or self.theme["font"]
+        if self.theme.get("cursor_color"):
+            cfg["cursorColor"] = self.theme["cursor_color"]
+        if self.theme.get("ripple_color"):
+            cfg["rippleColor"] = self.theme["ripple_color"]
+        if self.theme.get("spotlight_opacity") is not None:
+            cfg["spotlightOpacity"] = self.theme["spotlight_opacity"]
+        calls = [f"__ann.config({js(cfg)})"] if cfg else []
+        calls.append("__ann.clear()")
         for item in items or []:
             ((kind, a),) = item.items()
             a = dict(a) if isinstance(a, dict) else {"target": a}
@@ -841,6 +963,8 @@ class Runner:
                 calls.append(f"__ann.badge({js(target)},{js(a.pop('n'))},{js(a)})")
             else:
                 calls.append(f"__ann.{kind}({js(target)},{js(a)})")
+        if items and spotlight:
+            calls.append("__ann.spotlight()")
         expr = annotate_js() + ";(()=>{" + ";".join(calls) + ";return __ann.list()})()"
         return self.page(tab, expr) if items else self.b.evaluate(self.tabs[tab], expr)
 
@@ -1005,12 +1129,42 @@ class Runner:
                         rec["checks"].append(self.check(tab, render(exp, self.vars, strict=True)))
                 self.diag_end(tab, mark, rec)
                 rec["status"] = "passed" if all(c["ok"] for c in rec["checks"]) else "failed"
+                ann_t = self.now()
+                spot = step.get("spotlight")
+                if spot is None:
+                    spot = bool(self.settings.get("spotlight", False))
+                if step.get("annotate"):
+                    rec["annotations"] = self.annotate(
+                        tab, render(step["annotate"], self.vars, strict=True), spotlight=bool(spot)
+                    )
+                zoom_spec = step.get("zoom")
+                is_ann_zoom = (
+                    zoom_spec == "annotate"
+                    or (isinstance(zoom_spec, dict) and zoom_spec.get("mode") == "annotate")
+                    or (not zoom_spec and self.camera == "annotate" and bool(step.get("annotate")))
+                )
                 if follow and rec.get("camera"):
                     rec["zoom"] = {"follow": rec.pop("camera"), **({"factor": self.camera_factor})}
-                elif step.get("zoom") and step["zoom"] != "follow":
-                    rec["zoom"] = self.zoom_rect(tab, render(step["zoom"], self.vars, strict=True))
-                if step.get("annotate"):
-                    rec["annotations"] = self.annotate(tab, render(step["annotate"], self.vars, strict=True))
+                elif is_ann_zoom and step.get("annotate") and not is_desktop(self.tabs[tab]):
+                    time.sleep(0.12)
+                    try:
+                        brect = self.b.evaluate(self.tabs[tab], "window.__ann&&__ann.bounds()")
+                    except DriverError:
+                        brect = None
+                    if isinstance(brect, list) and len(brect) == 6:
+                        zcfg = zoom_spec if isinstance(zoom_spec, dict) else {}
+                        clip_start = max(0.0, (rec["start"] or 0.0) - 0.3)
+                        at_s = round(max(0.0, ((ann_t or rec["start"] or 0.0) - clip_start) - 0.1), 3)
+                        rec["zoom"] = {
+                            "rect": brect[:4],
+                            "viewport": brect[4:],
+                            "factor": zcfg.get("factor", self.camera_factor),
+                            "at": zcfg.get("at", at_s),
+                            "out": zcfg.get("out", True),
+                            **({k: zcfg[k] for k in ("in", "out_duration") if k in zcfg}),
+                        }
+                elif zoom_spec and zoom_spec not in ("follow", "annotate"):
+                    rec["zoom"] = self.zoom_rect(tab, render(zoom_spec, self.vars, strict=True))
             except (DriverError, ScenarioError, KeyError, ValueError, RuntimeError) as e:
                 rec["status"], rec["error"] = "error", str(e)
             if self.saved:
@@ -1116,6 +1270,8 @@ def run(
         **({"from_step": from_step, "resumed_vars": r.resumed} if from_step else {}),
         **({"cleanup": r.cleanup_results} if r.cleanup_results else {}),
         **({"downloads": r.downloads} if r.downloads else {}),
+        **({"previews": r.previews} if r.previews else {}),
+        **({"theme": r.theme} if r.theme else {}),
         "hold": hold,
         **({"trim_still": True} if settings.get("trim_still") else {}),
     }

@@ -107,6 +107,10 @@ class AgentBrowser:
         self.use(tab)
         return self.run("fill", selector, "--", str(value))
 
+    def type_text(self, tab, selector, value):
+        self.use(tab)
+        return self.run("type", selector, "--", str(value))
+
     def click(self, tab, selector):
         self.use(tab)
         out = self.run("click", selector)

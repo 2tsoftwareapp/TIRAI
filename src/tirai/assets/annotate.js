@@ -25,10 +25,19 @@
  * Every call returns the annotation id. Missing targets throw.
  */
 (() => {
-  const VERSION = '0.3.0';
+  const VERSION = '0.4.0';
   if (window.__ann && window.__ann.version === VERSION) return VERSION;
   document.getElementById('__ann_host')?.remove();
-  const CFG = { anim: 'draw', duration: 420, ease: 'cubic-bezier(.22,.8,.24,1)' };
+  const CFG = {
+    anim: 'draw',
+    duration: 420,
+    ease: 'cubic-bezier(.22,.8,.24,1)',
+    color: '#e5252a',
+    labelFont: "system-ui,'Segoe UI',sans-serif",
+    cursorColor: '#111827',
+    rippleColor: '#2563eb',
+    spotlightOpacity: 0.30,
+  };
   const NS = 'http://www.w3.org/2000/svg';
   const host = document.createElement('div');
   host.id = '__ann_host';
@@ -36,15 +45,20 @@
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>
     :host{all:initial}
-    svg{position:fixed;inset:0;width:100vw;height:100vh;overflow:visible}
-    .lbl{position:fixed;font:600 15px/1.3 system-ui,'Segoe UI',sans-serif;color:#fff;padding:6px 10px;border-radius:6px;
+    svg.ann-canvas{position:fixed;inset:0;width:100vw;height:100vh;overflow:visible}
+    .lbl{position:fixed;font:600 15px/1.3 var(--ann-font,system-ui,'Segoe UI',sans-serif);color:#fff;padding:6px 10px;border-radius:6px;
          box-shadow:0 2px 8px #0005;white-space:pre-wrap;max-width:360px}
     .badge{position:fixed;width:30px;height:30px;border-radius:50%;color:#fff;font:700 16px/30px system-ui,sans-serif;
            text-align:center;box-shadow:0 2px 6px #0006;border:2px solid #fff}
     .blur{position:fixed;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);background:#cbd5e1b3;border-radius:4px}
     .blur.solid{background:#cbd5e1}
     .sh{filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.35))}
-  </style><svg></svg>`;
+    .cur{position:fixed;left:0;top:0;width:28px;height:28px;pointer-events:none;z-index:10;
+         filter:drop-shadow(0 2px 4px rgba(0,0,0,.45));transform-origin:4px 3px;will-change:transform;display:none}
+    .cur svg{position:static;inset:auto;width:28px;height:28px;display:block;overflow:visible}
+    .rpl{position:fixed;border-radius:50%;pointer-events:none;z-index:9;border:3px solid var(--rpl-c,#2563eb);
+         background:color-mix(in srgb,var(--rpl-c,#2563eb) 22%,transparent);transform:translate(-50%,-50%)}
+  </style><svg class="ann-canvas"></svg>`;
   const svg = root.querySelector('svg');
   const mount = () => { if (!host.isConnected) (document.body || document.documentElement).appendChild(host); };
   mount();
@@ -118,7 +132,7 @@
   };
   const pad = (r, p) => ({ x: r.left - p, y: r.top - p, w: r.width + 2 * p, h: r.height + 2 * p });
   const el = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
-  const defaults = (o = {}) => ({ color: '#e5252a', width: 3, padding: 6, ...o });
+  const defaults = (o = {}) => ({ color: CFG.color || '#e5252a', width: 3, padding: 6, ...o });
 
   function makeLabel(text, color) {
     const d = document.createElement('div');
@@ -155,6 +169,7 @@
     const item = { id, kind, g, label, nodes: [], update: null };
     item.update = () => {
       const b = pad(rectOf(), opts.padding);
+      item._lastBox = b;
       build(item, b, opts);
       if (label && opts.labelPos !== 'none') placeLabel(label, b, opts.labelPos);
     };
@@ -251,6 +266,144 @@
       Object.assign(item.div.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
     });
   }
+  let spotEl = null;
+  function clearSpotlight() {
+    if (!spotEl) return;
+    const old = spotEl;
+    spotEl = null;
+    if (reduced()) return old.remove();
+    old.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 180, fill: 'forwards' }).onfinish = () => old.remove();
+  }
+  function spotlight(opacity) {
+    mount();
+    clearSpotlight();
+    const active = [...items.values()].filter((it) => !it.id.startsWith('mask-') && it.kind !== 'blur');
+    if (!active.length) return false;
+    const op = typeof opacity === 'number' ? opacity : CFG.spotlightOpacity;
+    if (!(op > 0)) return false;
+    const maskId = `ann-spot-${++seq}`;
+    const g = el('g', { 'data-spot': '1' });
+    const defs = el('defs', {});
+    const m = el('mask', { id: maskId });
+    m.appendChild(el('rect', { x: 0, y: 0, width: innerWidth, height: innerHeight, fill: '#fff' }));
+    active.forEach((it) => {
+      try {
+        const r = it._lastBox;
+        if (r && r.w > 0 && r.h > 0) {
+          m.appendChild(el('rect', { x: r.x - 10, y: r.y - 10, width: r.w + 20, height: r.h + 20, rx: 10, fill: '#000' }));
+        }
+      } catch (_) {}
+    });
+    defs.appendChild(m);
+    g.appendChild(defs);
+    g.appendChild(el('rect', { x: 0, y: 0, width: innerWidth, height: innerHeight, fill: `rgba(15,23,42,${op})`, mask: `url(#${maskId})` }));
+    svg.insertBefore(g, svg.firstChild);
+    spotEl = g;
+    if (!reduced()) g.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 320, easing: CFG.ease, fill: 'backwards' });
+    return true;
+  }
+  function bounds() {
+    const active = [...items.values()].filter((it) => !it.id.startsWith('mask-') && it.kind !== 'blur');
+    if (!active.length) return null;
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    const grow = (x, y, w, h) => {
+      if (!(w > 0 && h > 0)) return;
+      x1 = Math.min(x1, x); y1 = Math.min(y1, y);
+      x2 = Math.max(x2, x + w); y2 = Math.max(y2, y + h);
+    };
+    active.forEach((it) => {
+      const b = it._lastBox;
+      if (b) grow(b.x, b.y, b.w, b.h);
+      if (it.label) { const lr = it.label.getBoundingClientRect(); grow(lr.left, lr.top, lr.width, lr.height); }
+      if (it.div) { const dr = it.div.getBoundingClientRect(); grow(dr.left, dr.top, dr.width, dr.height); }
+    });
+    if (!Number.isFinite(x1)) return null;
+    const padPx = 28;
+    const bx = Math.max(0, x1 - padPx), by = Math.max(0, y1 - padPx);
+    const bw = Math.min(innerWidth - bx, (x2 - x1) + padPx * 2);
+    const bh = Math.min(innerHeight - by, (y2 - y1) + padPx * 2);
+    return [bx, by, bw, bh, innerWidth, innerHeight];
+  }
+
+  let curEl = null, curX = null, curY = null, curAnim = 0;
+  function ensureCursor(color) {
+    mount();
+    if (!curEl) {
+      curEl = document.createElement('div');
+      curEl.className = 'cur';
+      curEl.innerHTML = `<svg viewBox="0 0 28 28" width="28" height="28"><path d="M4 2 L4 22 L9.5 16.8 L13.2 24.5 L16.2 23.1 L12.5 15.5 L20 15.5 Z" fill="${color || CFG.cursorColor}" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>`;
+      root.appendChild(curEl);
+    } else if (color) {
+      const p = curEl.querySelector('path');
+      if (p) p.setAttribute('fill', color);
+    }
+    curEl.style.display = 'block';
+    return curEl;
+  }
+  function cursorMove(x, y, ms = 360, color) {
+    const c = ensureCursor(color);
+    const tx = Math.max(2, Math.min(innerWidth - 2, x));
+    const ty = Math.max(2, Math.min(innerHeight - 2, y));
+    if (curAnim) { cancelAnimationFrame(curAnim); curAnim = 0; }
+    if (curX === null || ms <= 0 || reduced()) {
+      curX = tx; curY = ty;
+      c.style.transform = `translate3d(${tx - 4}px,${ty - 3}px,0)`;
+      return true;
+    }
+    const sx = curX, sy = curY;
+    const dx = tx - sx, dy = ty - sy;
+    const dist = Math.hypot(dx, dy);
+    const dur = Math.max(180, Math.min(ms, 180 + dist * 0.45));
+    const arc = Math.min(42, dist * 0.12) * (dx >= 0 ? -1 : 1);
+    const mx = (sx + tx) / 2, my = (sy + ty) / 2 + arc;
+    const t0 = performance.now();
+    const step = (now) => {
+      const u = Math.min(1, (now - t0) / dur);
+      const e = 1 - Math.pow(1 - u, 3);
+      const inv = 1 - e;
+      curX = inv * inv * sx + 2 * inv * e * mx + e * e * tx;
+      curY = inv * inv * sy + 2 * inv * e * my + e * e * ty;
+      c.style.transform = `translate3d(${curX - 4}px,${curY - 3}px,0)`;
+      if (u < 1) curAnim = requestAnimationFrame(step); else curAnim = 0;
+    };
+    curAnim = requestAnimationFrame(step);
+    return dur;
+  }
+  function cursorClick(x, y, rippleColor) {
+    const c = ensureCursor();
+    const tx = typeof x === 'number' ? x : (curX ?? innerWidth / 2);
+    const ty = typeof y === 'number' ? y : (curY ?? innerHeight / 2);
+    curX = tx; curY = ty;
+    c.style.transform = `translate3d(${tx - 4}px,${ty - 3}px,0)`;
+    if (!reduced()) {
+      c.animate(
+        [
+          { transform: `translate3d(${tx - 4}px,${ty - 3}px,0) scale(1)` },
+          { transform: `translate3d(${tx - 4}px,${ty - 3}px,0) scale(0.82)` },
+          { transform: `translate3d(${tx - 4}px,${ty - 3}px,0) scale(1)` },
+        ],
+        { duration: 160, easing: 'ease-out' }
+      );
+      const r = document.createElement('div');
+      r.className = 'rpl';
+      r.style.setProperty('--rpl-c', rippleColor || CFG.rippleColor);
+      r.style.left = `${tx}px`;
+      r.style.top = `${ty}px`;
+      r.style.width = '14px';
+      r.style.height = '14px';
+      root.appendChild(r);
+      r.animate(
+        [
+          { width: '12px', height: '12px', opacity: 0.78 },
+          { width: '48px', height: '48px', opacity: 0 },
+        ],
+        { duration: 340, easing: 'cubic-bezier(.22,.8,.24,1)', fill: 'forwards' }
+      ).onfinish = () => r.remove();
+    }
+    return true;
+  }
+  function cursorHide() { if (curEl) curEl.style.display = 'none'; return true; }
+
   function clear(id) {
     const drop = (it) => {
       items.delete(it.id);
@@ -259,10 +412,15 @@
       nodes.forEach((n) => { n.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: 'ease-in', fill: 'forwards' }).onfinish = () => n.remove(); });
     };
     if (id) { const it = items.get(id); if (it) drop(it); return; }
+    clearSpotlight();
     [...items.values()].filter((it) => !it.id.startsWith('mask-')).forEach(drop);
   }
   function list() { return [...items.keys()]; }
-  function config(o) { Object.assign(CFG, o || {}); return { ...CFG }; }
+  function config(o) {
+    Object.assign(CFG, o || {});
+    if (CFG.labelFont) host.style.setProperty('--ann-font', CFG.labelFont);
+    return { ...CFG };
+  }
 
   let raf = 0;
   const tick = () => { raf = 0; items.forEach((it) => { try { it.update(); } catch (_) { /* target detached */ } }); };
@@ -327,6 +485,9 @@
     return scanMask();
   }
 
-  window.__ann = { version: VERSION, config, box, circle, arrow, text, badge, highlight, blur, clear, list, mask };
+  window.__ann = {
+    version: VERSION, config, box, circle, arrow, text, badge, highlight, blur, clear, list, mask,
+    spotlight, bounds, cursorMove, cursorClick, cursorHide,
+  };
   return VERSION;
 })();

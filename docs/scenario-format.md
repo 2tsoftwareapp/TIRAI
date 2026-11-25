@@ -136,8 +136,9 @@ match in page order, not list order; `validate` warns and suggests `targets:` fa
 | `count` | `count: { selector: "table tbody tr", equals: 3 }` |
 | `request` | `request: { url_contains: "/api/orders", status: 201 }` (any page or XHR/fetch request seen by the page; `status` optional) |
 | `no_console_errors` | `no_console_errors: {}` or `{ ignore: ["favicon"] }` (console errors/exceptions raised during this step) |
-| `pdf` | `pdf: { path: report.pdf, pages: 2 }` or `pages: [1, 3]` (range), optional `contains: "text"` (or a list) — checks the downloaded PDF; `path` resolves against the scenario dir, then `<out>/downloads/` |
-| `xlsx` | `xlsx: { path: report.xlsx, sheets: [Orders], contains: "A-1" }` — checks sheet names and cell text of the downloaded workbook |
+| `pdf` | `pdf: { path: report.pdf, pages: 2, contains: "Total", annotate: [{ arrow: { text: "27,000", label: "OK", from: top } }], zoom: true }` — checks the downloaded PDF; `annotate:` (`true`/`auto` or `box`/`arrow`/`highlight`/`circle`/`badge` by `text:` or `{x,y,w,h}`) draws Snagit-style callouts on the preview pages appended to `final.mp4` |
+| `xlsx` | `xlsx: { path: report.xlsx, sheets: [Orders], contains: "A-1", annotate: [{ box: { cell: "C2", label: "Matched" } }], preview: true }` — checks sheet names/cell text and optionally appends an annotated sheet preview |
+| `image` | `image: { path: shot.png, contains: "OK", annotate: [{ box: { text: "OK" } }], preview: true }` — checks an image (optional OCR `contains`) and appends an annotated preview (by `{x,y,w,h}` or OCR `text:`) |
 | `db` | `db: { sql: "SELECT status FROM users WHERE id=2", rows: [{status: LOCKED}] }` (`columns:` defaults to the keys of the first expected row, in SELECT order) — numbers compare by value, so `204000` matches `"204000.00000"` from PostgreSQL `numeric` |
 
 DOM checks retry for up to 6 s (`settings.expect_timeout: 15` for slow SPAs). `db` runs read-only against `databases.<name>.dsn` (default `default`),
@@ -272,7 +273,11 @@ steps:
 | Option | Where | Effect |
 |---|---|---|
 | Chapters | automatic | `final.mp4` has one chapter per step (title card included) |
-| `zoom: "#email"` | step | eases in (≈0.6 s) on the element and holds; factor defaults to 1.8, capped so the target fits |
+| `zoom: "#email"` | step | eases in (≈0.6 s) on the element and holds; add `out: true` in `{ target, factor, at, out }` to ease back out |
+| `zoom: annotate` / `camera: annotate` | step / `settings:` | automatically zooms in on the `annotate:` union box + labels, holds, and eases back out smoothly |
+| `spotlight: true` | step / `settings:` | dims the page around active `annotate:` targets (and on annotated PDF/Excel/image previews) |
+| `pace: human` (`slow`) | `settings:` | when recording, glides a 60fps virtual cursor with click ripples, types ASCII fields progressively, and adds brief natural pauses (dry-run stays full speed) |
+| `theme:` | top-level / `settings:` | customize `font`, `header_size`, `subtitle_size`, `subtitle_height`, `subtitle_bg`, `subtitle_color`, `tab_colors`, `pass_color`, `fail_color`, `accent`, `cursor_color`, `ripple_color`, `spotlight_opacity` |
 | `layout: split` | step | left: last frame of the previous step (or `split_with`), right: this step; useful for UI → DB proof |
 | `--lang vi` | `tirai record` / `compose` | burns that subtitle language; every language is also written as `subtitles.<lang>.srt` |
 | `zoom: follow` | step | zooms in and pans from one action target (click, fill, select…) to the next |
