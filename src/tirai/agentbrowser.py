@@ -50,6 +50,7 @@ class AgentBrowser:
         env = os.environ
         self.headed = headed if headed is not None else env.get("TIRAI_HEADED", "") not in ("", "0", "false")
         self.cursor = cursor if cursor is not None else env.get("TIRAI_CURSOR", "1") not in ("0", "false")
+        self.expect_popups = True  # runner sets False when scenario has no popup tabs to avoid extra tab switches
         self.init_scripts = []  # JS sources registered before any page script when the session launches
         self._init_dir = None
 
@@ -114,15 +115,18 @@ class AgentBrowser:
     def click(self, tab, selector):
         self.use(tab)
         out = self.run("click", selector)
-        self.active = None  # a click may open a popup that Chrome focuses; re-select next time
+        if self.expect_popups:
+            self.active = None  # a click may open a popup that Chrome focuses; re-select next time
         return out
 
     def press(self, tab, key, selector=None):
         self.use(tab)
         if selector:
             self.run("focus", selector)
-        out = self.run("press", _key(key))
-        self.active = None  # Enter on a link may open a popup tab that Chrome focuses
+        k = _key(key)
+        out = self.run("press", k)
+        if self.expect_popups and k not in ("Tab", "Shift+Tab", "Backspace", "Delete", "Escape", "Control+A", "Meta+A"):
+            self.active = None  # Enter/F-keys may open a popup tab that Chrome focuses
         return out
 
     def select(self, tab, selector, values):

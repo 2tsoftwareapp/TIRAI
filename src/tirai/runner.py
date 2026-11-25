@@ -145,7 +145,9 @@ class Runner:
         self.previews = []
         self._step_id = None
         settings = scenario.get("settings") or {}
+        has_explicit_timing = "TIRAI_TIMING_SCALE" in os.environ or settings.get("timing_scale") is not None
         self.timing = float(os.environ.get("TIRAI_TIMING_SCALE") or settings.get("timing_scale", 1.0))
+        self.dry_scale = 0.25 if (not record and not has_explicit_timing) else 1.0
         self.expect_timeout = float(os.environ.get("TIRAI_EXPECT_TIMEOUT") or settings.get("expect_timeout", 6))
         self.settings = settings
         self.theme = {**(scenario.get("theme") or {}), **(settings.get("theme") or {})}
@@ -162,12 +164,18 @@ class Runner:
         self.action_hold = float(settings.get("action_hold", 0.35))
         self.show_expects = bool(settings.get("show_expects", False))
         self.expect_pos = settings.get("expect_pos", "top-right")
+        if hasattr(self.b, "expect_popups"):
+            self.b.expect_popups = any(isinstance(cfg, dict) and cfg.get("popup") for cfg in scenario["tabs"].values())
         if self.record and self.pace != "fast" and self.cursor_glide and hasattr(self.b, "cursor"):
             self.b.cursor = False  # replace built-in teleporting cursor with smooth 60fps overlay cursor
 
     def pause(self, seconds):
-        """Settle delay after UI actions; scale with TIRAI_TIMING_SCALE / settings.timing_scale on slow machines."""
-        time.sleep(seconds * self.timing)
+        """Settle delay after UI actions; scaled down in dry-run for speed, or by timing_scale on slow machines."""
+        time.sleep(seconds * self.timing * self.dry_scale)
+
+    def _poll_pause(self, attempt):
+        """Fast exponential poll backoff (0.1s -> 0.16s -> 0.26s -> 0.41s -> 0.5s) for quicker dry-run/expect."""
+        time.sleep(min(0.5, 0.1 * (1.6 ** min(attempt, 5))) * self.timing)
 
     def dbx(self, tab):
         cfg = {**DBX_DEFAULTS, **(self.sc["tabs"][tab].get("dbx") or {})}
@@ -490,16 +498,21 @@ class Runner:
         return self.b.evaluate(self.tabs[tab], tg.with_tags(self.targets, expr))
 
     def retarget(self, tab, names):
-        """Tag the targets an action uses, waiting for them like an expectation; fail with what each locator matched."""
+        """Tag only the targets an action uses, polling with fast backoff; fail with what each locator matched."""
         if not names or is_desktop(self.tabs[tab]):
             return
+        subset = {n: self.targets[n] for n in names if n in self.targets}
+        if not subset:
+            return
         deadline = time.time() + self.expect_timeout
+        attempt = 0
         while True:
-            report = self.b.evaluate(self.tabs[tab], tg.tag_expr(self.targets)) or {}
-            if all((report.get(n) or {}).get("ok") for n in names) or time.time() > deadline:
+            report = self.b.evaluate(self.tabs[tab], tg.tag_expr(subset)) or {}
+            if all((report.get(n) or {}).get("ok") for n in subset) or time.time() > deadline:
                 break
-            self.pause(0.5)
-        for n in sorted(names):
+            self._poll_pause(attempt)
+            attempt += 1
+        for n in sorted(subset):
             info = report.get(n)
             if not (info or {}).get("ok"):
                 hint = self.nearby(tab, " ".join(self.targets[n]["locators"]))
@@ -683,7 +696,8 @@ class Runner:
             and not is_desktop(self.tabs[tab])
         ):
             try:
-                if self.page(tab, SCROLL_IF_NEEDED.format(sel=js(target))):
+                # retarget() already tagged this action's targets above, so avoid a redundant full-DOM re-tag.
+                if self.b.evaluate(self.tabs[tab], SCROLL_IF_NEEDED.format(sel=js(target))):
                     self.pause(0.4)
             except DriverError:
                 pass
@@ -970,11 +984,13 @@ class Runner:
         else:
             raise ValueError(f"unknown expect {kind}")
         deadline = time.time() + self.expect_timeout
+        attempt = 0
         while True:
             ok, actual = self.page(tab, expr)
             if ok or time.time() > deadline:
                 break
-            self.pause(0.5)
+            self._poll_pause(attempt)
+            attempt += 1
         if not ok and actual == "not found":
             names = tg.used_in(arg)
             if names:
@@ -1297,7 +1313,8 @@ class Runner:
                 rec["writes"] = why
                 self.wrote.append(step["id"])
             try:
-                self.annotate(tab, [])
+                if self.record:
+                    self.annotate(tab, [])
                 inline = [e for a in step.get("actions", []) for e in _listify(a.get("expect"))]
                 if any("no_console_errors" in e for e in [*step.get("expect", []), *inline]):
                     self.console_since[tab] = self.console_cursor(tab)
@@ -1423,13 +1440,17 @@ class Runner:
                     self.inspected.append({"step": step["id"], "title": step["title"], "url": url, "elements": els})
                 except DriverError as e:
                     print(f"     inspect failed: {e}")
-            time.sleep(step.get("hold", self.hold))
-            shot = self.out / f"step-{step['id']}.png"
-            try:
-                self.b.screenshot(self.tabs[tab], str(shot))
-                rec["screenshot"] = shot.name
-            except DriverError:
-                pass
+            if self.record:
+                time.sleep(step.get("hold", self.hold))
+            elif self.hold > 0:
+                time.sleep(self.hold)
+            if self.record or self.inspect or rec["status"] != "passed":
+                shot = self.out / f"step-{step['id']}.png"
+                try:
+                    self.b.screenshot(self.tabs[tab], str(shot))
+                    rec["screenshot"] = shot.name
+                except DriverError:
+                    pass
             rec["end"] = self.now()
             results.append(rec)
             print(f"[{step['id']}] {rec['status'].upper()}" + (f": {rec.get('error')}" if rec.get("error") else ""))
@@ -1482,7 +1503,7 @@ def run(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     settings = scenario.get("settings") or {}
-    hold = hold if hold is not None else float(settings.get("hold", 2.5) if record else 0.3)
+    hold = hold if hold is not None else float(settings.get("hold", 2.5) if record else 0.0)
     r = Runner(
         scenario,
         out,
