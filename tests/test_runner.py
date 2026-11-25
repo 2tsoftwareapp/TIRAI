@@ -208,3 +208,33 @@ def test_camera_follow_and_fast_forward_are_recorded(monkeypatch, tmp_path):
     st = tl["steps"][0]
     assert st["zoom"]["follow"][0]["rect"] == [10, 20, 100, 30]
     assert st["idle"][0][2] == 4.0
+
+
+def test_dbx_sql_waits_for_editor_after_new_query(monkeypatch, tmp_path):
+    d = FakeDriver()
+    monkeypatch.setattr(
+        d, "wait_for", lambda tab, sel, timeout="10s": d._log("wait_for", tab, sel, timeout), raising=False
+    )
+
+    def eval_fn(tab, expr):
+        if "New Query" in expr:
+            return True
+        if expr.startswith("!!document.querySelector"):
+            return False
+        if "DBX" in expr or "data-slot" in expr or "flex-1" in expr:
+            return None
+        return [True, "ok"]
+
+    monkeypatch.setattr(d, "evaluate", eval_fn)
+    monkeypatch.setattr(runner, "make_driver", lambda *a, **k: d)
+    monkeypatch.setattr(runner.Runner, "pause", lambda self, s: None)
+    sc = scenario()
+    sc["tabs"]["db"]["kind"] = "dbx"
+    sc["steps"] = [
+        {"id": "DB1", "tab": "db", "title": "Query", "actions": [{"sql": "SELECT 1"}], "expect": [{"visible": "body"}]}
+    ]
+    tl = runner.run(sc, tmp_path, record=False, hold=0)
+    assert tl["steps"][0]["status"] == "passed"
+    wait_idx = next(i for i, c in enumerate(d.calls) if c[0] == "wait_for" and c[2] == ".cm-content")
+    fill_idx = next(i for i, c in enumerate(d.calls) if c[0] == "fill" and c[2] == ".cm-content")
+    assert wait_idx < fill_idx
