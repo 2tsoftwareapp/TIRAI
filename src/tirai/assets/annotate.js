@@ -45,7 +45,7 @@
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>
     :host{all:initial}
-    svg{position:fixed;inset:0;width:100vw;height:100vh;overflow:visible}
+    svg.ann-canvas{position:fixed;inset:0;width:100vw;height:100vh;overflow:visible}
     .lbl{position:fixed;font:600 15px/1.3 var(--ann-font,system-ui,'Segoe UI',sans-serif);color:#fff;padding:6px 10px;border-radius:6px;
          box-shadow:0 2px 8px #0005;white-space:pre-wrap;max-width:360px}
     .badge{position:fixed;width:30px;height:30px;border-radius:50%;color:#fff;font:700 16px/30px system-ui,sans-serif;
@@ -55,9 +55,10 @@
     .sh{filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.35))}
     .cur{position:fixed;left:0;top:0;width:28px;height:28px;pointer-events:none;z-index:10;
          filter:drop-shadow(0 2px 4px rgba(0,0,0,.45));transform-origin:4px 3px;will-change:transform;display:none}
+    .cur svg{position:static;inset:auto;width:28px;height:28px;display:block;overflow:visible}
     .rpl{position:fixed;border-radius:50%;pointer-events:none;z-index:9;border:3px solid var(--rpl-c,#2563eb);
          background:color-mix(in srgb,var(--rpl-c,#2563eb) 22%,transparent);transform:translate(-50%,-50%)}
-  </style><svg></svg>`;
+  </style><svg class="ann-canvas"></svg>`;
   const svg = root.querySelector('svg');
   const mount = () => { if (!host.isConnected) (document.body || document.documentElement).appendChild(host); };
   mount();
