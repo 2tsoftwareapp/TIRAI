@@ -16,8 +16,8 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 - `settings.single_tab: true`: apps that open child screens with `window.open`/`target=_blank` navigate the same
   tab, so the screencast never freezes on the opener page.
 - DBX steps compact the SQL editor pane (30/70 split) before recording so the result grid is readable on video.
-- Video header font auto-selects a glyph-covering font (CJK titles no longer render as boxes); `TIRAI_FONT_HEADER`
-  overrides it and `tirai validate` warns about characters the chosen font lacks.
+- All scenario text on video (title card, step header bar, subtitles, PDF page headers) is burned through libass,
+  which falls back per glyph: mixed Vietnamese + Japanese titles render cleanly with no `□□□` boxes.
 - `tirai doctor` reports DBX as failing when it answers with `authenticated: false` (password-protected, HTTP 401).
 - `expect: request` failures list the 5 matched and 12 most recent request URLs for debugging.
 - `expect: db` compares numbers by value (`204000` matches PostgreSQL `"204000.00000"`).
@@ -61,6 +61,8 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 - Unexpected errors print one `error: …` line; `TIRAI_DEBUG=1` shows the traceback.
 - `tirai dbx -d` no longer fails with AddrInUse when another (non-DBX) service holds port 4224: it picks the next
   free port and prints the `DBX_URL` to use.
+- agent-browser re-selects the step's tab before every command after a click/press/download: a `window.open` popup
+  that Chrome focuses no longer makes later `expect:`/`annotate:` in the same step run on the popup tab.
 - `tirai setup` skips sudo package installs when sudo would prompt without a terminal (agent shells) and prints the
   command instead.
 

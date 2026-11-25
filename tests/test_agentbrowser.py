@@ -40,7 +40,23 @@ def test_commands_target_session_and_switch_tabs(cli):
     cmds = [c for c, _ in cli.calls]
     assert cmds[0] == ["agent-browser", "--session", "s1", "--json", "fill", "#email", "--", "a@b.c"]
     assert cmds[1][4:] == ["tab", "t2"] and cmds[2][4:] == ["click", "#go"]
-    assert b.active == "t2"
+    assert b.active is None  # the click may have opened a popup; the next command re-selects
+
+
+def test_click_press_download_reselect_tab_after_popup(cli):
+    actions = (
+        lambda b: b.click("t1", "#open"),
+        lambda b: b.press("t1", "Enter"),
+        lambda b: b.download("t1", "#dl", "/tmp/x"),
+    )
+    b = ab.AgentBrowser("s1", cursor=False)
+    for action in actions:
+        b.active = "t1"
+        action(b)
+        assert b.active is None, "popup may have stolen Chrome's focus"
+        b.evaluate("t1", "1")
+        assert [c[0][4:] for c in cli.calls][-2] == ["tab", "t1"]
+        b.active = "t1"
 
 
 def test_evaluate_uses_stdin_and_returns_result(cli):

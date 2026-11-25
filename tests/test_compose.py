@@ -65,6 +65,32 @@ def test_compose_two_tab_segments(tmp_path):
     assert "| S2 | DB |" in (tmp_path / "report.md").read_text(encoding="utf-8")
 
 
+def test_build_ass_keeps_cjk_and_times():
+    tl = {
+        "scenario": "受注番号を確認 — Kiểm tra đơn hàng",
+        "mode": "record",
+        "created": "2026-01-01 00:00:00",
+        "driver": "agent-browser",
+        "tabs": {"app": {"label": "APP"}},
+        "steps": [
+            {
+                "id": "S1",
+                "tab": "app",
+                "title": "受注番号を確認",
+                "subtitle": "Xác nhận số đơn",
+                "status": "passed",
+                "final_start": 3.0,
+                "final_end": 6.5,
+            }
+        ],
+    }
+    ass = compose.build_ass(tl, (1280, 720), 3.0)
+    assert "PlayResX=" in ass and "PlayResY=288" in ass
+    assert "受注番号を確認" in ass  # CJK text is kept for libass font fallback
+    assert ",Hdr," in ass and ",Sub," in ass and ",T1," in ass
+    assert "0:00:03.00" in ass and "0:00:06.50" in ass
+
+
 def test_compose_rejects_dry_run(tmp_path):
     (tmp_path / "timeline.json").write_text(json.dumps({"mode": "dry-run"}))
     if not compose.ffmpeg_bin() or not compose.find_font():

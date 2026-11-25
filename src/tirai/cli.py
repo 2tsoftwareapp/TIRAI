@@ -112,14 +112,6 @@ def cmd_validate(args):
     env = env_file_unignored(args.scenario)
     if env:
         print(f"warning: {env} holds secrets but git does not ignore it; add it to .gitignore (tirai init does)")
-    from tirai.system import header_fonts
-
-    texts = [sc["name"], *[f"{s.get('title', '')}" for s in sc["steps"]]]
-    for bold in (False, True):
-        _, missing = header_fonts(texts, bold)
-        if missing:
-            print(f"warning: video header font lacks glyphs for: {missing} (set TIRAI_FONT_HEADER)")
-            break
     if not args.no_db_check:
         check_databases(sc)
     return 0

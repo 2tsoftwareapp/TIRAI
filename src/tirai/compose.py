@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 from tirai import export, report
-from tirai.system import ffmpeg_bin, ffprobe_bin, find_font, header_fonts, run_text, subtitle_font_name  # noqa: F401
+from tirai.system import ffmpeg_bin, ffprobe_bin, find_font, run_text, subtitle_font_name  # noqa: F401
 
 FPS = 30
 TOP, BOTTOM = 40, 64  # header bar (tab/step/status) and subtitle band
@@ -69,6 +69,99 @@ def ts(sec):
     return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
 
 
+def ass_ts(sec):
+    """ASS timestamp h:mm:ss.cc (centiseconds)."""
+    cs = max(0, int(round(sec * 100)))
+    h, cs = divmod(cs, 360000)
+    m, cs = divmod(cs, 6000)
+    s, c = divmod(cs, 100)
+    return f"{h}:{m:02d}:{s:02d}.{c:02d}"
+
+
+def ass_escape(text):
+    return str(text).replace("\r", " ").replace("\n", "\\N")
+
+
+def _ass_style(name, font, size, bold, outline, align, ml, mr, mv):
+    return (
+        f"{name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,{bold},0,0,0,100,100,0,0,1,"
+        f"{outline},0,{align},{ml},{mr},{mv},1"
+    )
+
+
+def _ass_doc(play_x, styles, events):
+    """PlayResY stays 288 so the subtitle style renders exactly like the old SRT force_style."""
+    lines = [
+        "[Script Info]",
+        f"PlayResX={play_x}",
+        "PlayResY=288",
+        "WrapStyle=0",
+        "ScaledBorderAndShadow=yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+        "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding",
+        *styles,
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    lines += [f"Dialogue: 0,{a},{b},{style},,0,0,0,,{text}" for a, b, style, text in events]
+    return "\n".join(lines) + "\n"
+
+
+def build_ass(tl, size, title_seconds):
+    """One ASS file for the title card, header bar and subtitles; libass font fallback covers CJK."""
+    W, H = size
+    fh = H + TOP + BOTTOM
+    k = 288 / fh
+    play_x = max(16, round(W * k))
+    font = subtitle_font_name()
+    passed = sum(s["status"] == "passed" for s in tl["steps"])
+    styles = [
+        _ass_style("Sub", font, 10, 0, 0.6, 2, 10, 10, 6),
+        _ass_style(
+            "Hdr",
+            font,
+            max(1, round(20 * k)),
+            -1,
+            0,
+            7,
+            max(2, round(16 * k)),
+            max(10, round(110 * k)),
+            max(1, round(10 * k)),
+        ),
+        _ass_style("T1", font, max(1, round(44 * k)), -1, 0, 5, 0, 0, 0),
+        _ass_style("T2", font, max(1, round(24 * k)), 0, 0, 5, 0, 0, 0),
+        _ass_style("T3", font, max(1, round(20 * k)), 0, 0, 5, 0, 0, 0),
+        _ass_style("Pdf", font, max(1, round(22 * k)), -1, 0, 7, max(2, round(20 * k)), 10, max(1, round(8 * k))),
+    ]
+    cx = round(play_x / 2)
+    end_title = ass_ts(title_seconds)
+
+    def title_line(text, style, dy):
+        # drawtext centred with y=(h-text_h)/2+dy; \an5 + \pos does the same in script units.
+        y = round((fh / 2 + dy) * k)
+        return (ass_ts(0), end_title, style, ass_escape(f"{{\\pos({cx},{y})}}{text}"))
+
+    events = [
+        title_line(tl["scenario"], "T1", -60),
+        title_line(f"{passed}/{len(tl['steps'])} steps passed  ·  recorded {tl['created']}", "T2", 10),
+        title_line(
+            f"Evidence: {DRIVER_NAMES.get(tl.get('driver'), 'browser')} recording + TIRAI annotations", "T3", 60
+        ),
+    ]
+    for s in tl["steps"]:
+        a, b = ass_ts(s["final_start"]), ass_ts(s["final_end"])
+        label = tl["tabs"].get(s["tab"], {}).get("label", s["tab"])
+        events.append((a, b, "Hdr", ass_escape(f"{label}   |   {s['id']}  {s.get('title', '')}")))
+        sub_a = ass_ts(s["final_start"] + 0.2)
+        sub_b = ass_ts(max(s["final_start"] + 0.3, s["final_end"] - 0.1))
+        events.append((sub_a, sub_b, "Sub", ass_escape(s.get("subtitle") or s.get("title", ""))))
+    return _ass_doc(play_x, styles, events)
+
+
 def text_file(tmp, name, content):
     (Path(tmp) / name).write_text(content, encoding="utf-8")
     return name  # ffmpeg runs with cwd=tmp, so relative names avoid filter-path escaping
@@ -90,33 +183,15 @@ def encode_args(out):
     ]
 
 
-def title_card(tmp, tl, out, seconds, frame):
+def title_card(tmp, out, seconds, frame):
+    """Plain colour card; its text is burned with the subtitles pass (ASS, so CJK fonts fall back)."""
     W, H = frame
     FH = H + TOP + BOTTOM
-    passed = sum(s["status"] == "passed" for s in tl["steps"])
-    lines = [
-        (tl["scenario"], 44, "font-bold.ttf", -60),
-        (f"{passed}/{len(tl['steps'])} steps passed  ·  recorded {tl['created']}", 24, "font.ttf", 10),
-        (
-            f"Evidence: {DRIVER_NAMES.get(tl.get('driver'), 'browser')} recording + TIRAI annotations",
-            20,
-            "font.ttf",
-            60,
-        ),
-    ]
-    draws = []
-    for i, (txt, size, font, dy) in enumerate(lines):
-        f = text_file(tmp, f"title{i}.txt", txt)
-        draws.append(
-            f"drawtext=fontfile={font}:textfile={f}:fontsize={size}:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2+{dy}"
-        )
     ff(
         "-f",
         "lavfi",
         "-i",
         f"color=c=0x0f172a:s={W}x{FH}:d={seconds}:r={FPS}",
-        "-vf",
-        ",".join(draws),
         *encode_args(out),
         cwd=tmp,
     )
@@ -234,10 +309,8 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
     seg = rec_dir / step["segment"]
     start = max(0.0, step["start"] - lead)
     dur = step["end"] - start
-    label = tl["tabs"][step["tab"]]["label"]
     color = TAB_COLORS[list(tl["tabs"]).index(step["tab"]) % len(TAB_COLORS)]
     status = "PASS" if step["status"] == "passed" else "FAIL"
-    hdr = text_file(tmp, f"hdr-{step['id']}.txt", f"{label}   |   {step['id']}  {step['title']}")
     st = text_file(tmp, f"st-{step['id']}.txt", status)
     st_color = "0x16a34a" if status == "PASS" else "0xdc2626"
     bold = "font-bold.ttf"
@@ -253,9 +326,9 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
         f"{zoom_filter(step, video_size(seg), start)}{ff_filter}{badges}"
     )
     dur -= saved
+    # The header text is burned by the subtitles pass (ASS); the clip only draws the bar and badge.
     chrome = (
         f"pad={W}:{H + TOP}:0:{TOP}:color={color},pad={W}:{FH}:0:0:color=0x0f172a,"
-        f"drawtext=fontfile={bold}:textfile={hdr}:fontsize=20:fontcolor=white:x=16:y=10,"
         f"drawbox=x=iw-96:y=6:w=80:h=28:color={st_color}:t=fill,"
         f"drawtext=fontfile={bold}:textfile={st}:fontsize=18:fontcolor=white:x=w-56-text_w/2:y=11"
     )
@@ -328,6 +401,19 @@ def audio_seconds(path):
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
 
 
+def pdf_page_ass(tmpd, d, i, n, W, H):
+    """One-event ASS burned on a PDF page clip: 'PDF <file> — page i/n' in the header strip."""
+    k = 288 / (H + TOP + BOTTOM)
+    play_x = max(16, round(W * k))
+    style = _ass_style(
+        "Pdf", subtitle_font_name(), max(1, round(22 * k)), -1, 0, 7, max(2, round(20 * k)), 10, max(1, round(8 * k))
+    )
+    text = ass_escape(f"PDF {d['file']} — page {i}/{n}")
+    name = f"pdfpage-{d['step']}-{i}.ass"
+    (tmpd / name).write_text(_ass_doc(play_x, [style], [(ass_ts(0), ass_ts(4), "Pdf", text)]), encoding="utf-8")
+    return name
+
+
 def append_pdf_pages(tmpd, final, tl, rec_dir, size):
     """Append rendered pages of PDFs downloaded with `download: {append: true}` to the end of final.mp4."""
     from tirai.filescheck import pdf_page_images
@@ -346,8 +432,7 @@ def append_pdf_pages(tmpd, final, tl, rec_dir, size):
             print(f"warning: {e}; skipping PDF pages for {d['file']}")
             continue
         for i, img in enumerate(pages, 1):
-            hdr = tmpd / f"pdfhdr-{d['step']}-{i}.txt"
-            hdr.write_text(f"PDF {d['file']} — page {i}/{len(pages)}", encoding="utf-8")
+            ass = pdf_page_ass(tmpd, d, i, len(pages), W, H)
             clip = tmpd / f"pdf-{d['step']}-{i}.mp4"
             ff(
                 "-loop",
@@ -359,7 +444,7 @@ def append_pdf_pages(tmpd, final, tl, rec_dir, size):
                 "-vf",
                 f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
                 f"pad={W}:{FH}:0:40:color=0x111827,"
-                f"drawtext=fontfile=font-bold.ttf:textfile={hdr.name}:fontsize=22:fontcolor=white:x=20:y=8",
+                f"subtitles={ass}:fontsdir=.",
                 *encode_args(clip),
                 cwd=tmpd,
             )
@@ -440,19 +525,11 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
     tl = json.loads(tl_path.read_text(encoding="utf-8"))
     if tl.get("mode") != "record":
         raise ValueError("timeline was not recorded; run `tirai run --record` first")
-    # drawtext uses one fontfile with no fallback: pick fonts that cover the header text (CJK titles need CJK fonts).
-    texts = [tl["scenario"]]
-    for s in tl["steps"]:
-        tab = tl["tabs"].get(s["tab"], {})
-        texts.append(f"{tab.get('label', s['tab'])} {s['id']} {s.get('title', '')}")
-    fonts = (header_fonts(texts, False), header_fonts(texts, True))
-    if not fonts[0][0] or not fonts[1][0]:
+    # Only the ASCII badges still use drawtext; all scenario text (title card, header bar, subtitles,
+    # PDF page headers) is burned through libass, whose font fallback covers CJK and Vietnamese mixed text.
+    fonts = (find_font(False), find_font(True))
+    if not fonts[0] or not fonts[1]:
         raise RuntimeError("no font found; set TIRAI_FONT to a .ttf file")
-    for i, (path, missing) in enumerate(fonts):
-        if missing:
-            msg = f"header font {'bold ' if i else ''}{path} lacks glyphs for: {missing}"
-            print(f"warning: {msg} (set TIRAI_FONT_HEADER)")
-    fonts = (fonts[0][0], fonts[1][0])
     rec_dir = tl_path.parent
     final = Path(out) if out else rec_dir / "final.mp4"
     if trim_still or tl.get("trim_still"):
@@ -470,7 +547,7 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
         langs = subtitle_languages(tl, lang) or [None]
         clips, srt, t = [], {x: [] for x in langs}, 0.0
         title = tmpd / "00-title.mp4"
-        title_card(tmp, tl, title, title_seconds, size)
+        title_card(tmp, title, title_seconds, size)
         clips.append(title)
         t += title_seconds
         for i, step in enumerate(tl["steps"], 1):
@@ -495,13 +572,7 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
                 (rec_dir / f"subtitles.{x}.srt").write_text("\n".join(cues), encoding="utf-8")
         if langs[0]:
             tl["lang"] = langs[0]
-        (tmpd / "subs.srt").write_text(srt_text, encoding="utf-8")
-        # libass scales SRT styles from a 288px-high canvas: FontSize 10 ~ 28px, MarginV 6 ~ 17px at 808px.
-        font_name = subtitle_font_name()
-        style = (
-            f"FontName={font_name},FontSize=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
-            "BorderStyle=1,Outline=0.6,Shadow=0,MarginV=6,Alignment=2"
-        )
+        (tmpd / "subs.ass").write_text(build_ass(tl, size, title_seconds), encoding="utf-8")
         chapters = chapters_file(tmp, tl, title_seconds)
         ff(
             "-i",
@@ -513,7 +584,7 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
             "-map_chapters",
             "1",
             "-vf",
-            f"subtitles=subs.srt:fontsdir=.:force_style='{style}'",
+            "subtitles=subs.ass:fontsdir=.",
             *encode_args(final),
             cwd=tmp,
         )
