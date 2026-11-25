@@ -14,11 +14,12 @@
 set -eu
 
 MODE="${TIRAI_INSTALL_MODE:-auto}"
+EXPLICIT=0  # --binary/--source: the user asked for this method, so reinstall even at the same version
 for a; do
   shift
   case "$a" in
-    --binary) MODE=binary ;;
-    --source) MODE=source ;;
+    --binary) MODE=binary; EXPLICIT=1 ;;
+    --source) MODE=source; EXPLICIT=1 ;;
     *) set -- "$@" "$a" ;;
   esac
 done
@@ -28,7 +29,7 @@ REF="${TIRAI_REF:-main}"
 SOURCE="${TIRAI_SOURCE:-https://github.com/${REPO}/archive/${REF}.zip}"
 TIRAI_HOME="${TIRAI_HOME:-$HOME/.tirai}"
 BIN_DIR="${TIRAI_BIN_DIR:-$HOME/.local/bin}"
-EXTRAS="${TIRAI_EXTRAS:-postgres,excel}"
+EXTRAS="${TIRAI_EXTRAS:-postgres,excel,pdf}"
 
 log() { printf '[tirai] %s\n' "$*"; }
 die() { printf '[tirai] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -140,7 +141,7 @@ current_version() {
 TIRAI_EXE=""
 have="$(current_version || true)"
 want="$(latest_version || true)"
-if [ "${TIRAI_FORCE:-0}" != "1" ] && [ -n "$have" ] && [ "$have" = "$want" ] && [ -z "${TIRAI_BINARY:-}${TIRAI_SOURCE:-}" ]; then
+if [ "${TIRAI_FORCE:-0}" != "1" ] && [ "$EXPLICIT" = 0 ] && [ -n "$have" ] && [ "$have" = "$want" ] && [ -z "${TIRAI_BINARY:-}${TIRAI_SOURCE:-}" ]; then
   log "tirai ${have} is already installed (${BIN_DIR}/tirai); skipping reinstall (TIRAI_FORCE=1 to force)"
   MODE=keep
   TIRAI_EXE="$(readlink "$BIN_DIR/tirai" 2>/dev/null || printf '%s' "$BIN_DIR/tirai")"

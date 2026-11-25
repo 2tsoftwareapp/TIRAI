@@ -49,7 +49,16 @@ def checks():
         yield "bsk doctor", ok, detail, not ab
     dbx = find_dbx()
     if dbx:
-        yield "DBX web", True, f"{dbx[0]}: {dbx[1]}", False
+        detail = f"{dbx[0]}: {dbx[1]}"
+        ok = True
+        if dbx[0] == "running":
+            from tirai.system import dbx_auth
+
+            _, authed, required = dbx_auth(dbx[1])
+            if required and not authed:
+                ok = False
+                detail = f"{detail} (running, but password-protected: HTTP 401; set DBX_PASSWORD for dbx-connect)"
+        yield "DBX web", ok, detail, False
     else:
         hint = "`tirai dbx` will pull the Docker image" if find_bin("docker") else "run `tirai setup`"
         yield "DBX web", False, f"not found ({hint})", False

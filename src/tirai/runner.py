@@ -19,6 +19,16 @@ from tirai.resources import annotate_js
 from tirai.scenario import ScenarioError, interpolate, render, step_writes
 from tirai.system import primary_modifier
 
+# `settings.single_tab`: window.open / target=_blank navigate in the same tab, so one screencast
+# follows the whole flow (for apps that open child screens in popups).
+SINGLE_TAB_JS = (
+    "(()=>{if(window.__tiraiSingleTab)return true;window.__tiraiSingleTab=1;"
+    "const o=window.open;window.open=function(u,...a){if(!u)return o.apply(this,[u,...a]);"
+    "try{location.href=new URL(u,location.href).href}catch(e){location.href=u}return window};"
+    "document.addEventListener('click',e=>{const a=e.target&&e.target.closest&&e.target.closest('a[target=_blank]');"
+    "if(a&&a.href){e.preventDefault();e.stopPropagation();location.href=a.href}},true);return true})()"
+)
+
 DBX_DEFAULTS = {
     "new_query": "New Query",  # button text that opens a SQL editor
     "editor": ".cm-content",
@@ -29,6 +39,12 @@ DBX_DEFAULTS = {
 
 
 DBX_NO_CONNECTION = "Select connection"
+# Shrink the SQL editor pane so the Table Data grid gets most of the DBX view on video.
+DBX_COMPACT_JS = (
+    "(()=>{const sp=document.querySelector('.sql-editor-workspace-split');if(!sp)return false;"
+    "const p=[...sp.querySelectorAll(':scope > .splitpanes__pane')];if(p.length<2)return false;"
+    "p[0].style.height='30%';p[1].style.height='70%';return true})()"
+)
 # The editor toolbar's connection picker: the popover trigger showing a connection name or the placeholder.
 DBX_CONN_TRIGGER = (
     "(()=>{const n=new Set([...document.querySelectorAll('.tree-connection-label')].map(e=>e.innerText.trim()));"
@@ -124,6 +140,8 @@ class Runner:
         self.inspected = []
         self.segments = []
         self.seg = None
+        self.downloads = []
+        self._step_id = None
         settings = scenario.get("settings") or {}
         self.timing = float(os.environ.get("TIRAI_TIMING_SCALE") or settings.get("timing_scale", 1.0))
         self.expect_timeout = float(os.environ.get("TIRAI_EXPECT_TIMEOUT") or settings.get("expect_timeout", 6))
@@ -279,12 +297,14 @@ class Runner:
         if kind == "navigate":
             self.b.navigate(tid, interpolate(arg))
             self.apply_privacy(tab)
+            self.apply_single_tab(tab)
             self.pause(1.0)
         elif kind == "fill":
             self.b.fill(tid, arg["selector"], interpolate(arg["value"]))
         elif kind == "click":
             self.b.click(tid, arg)
             self.apply_privacy(tab)
+            self.apply_single_tab(tab)
             self.pause(1.0)
         elif kind == "press":
             arg = {"key": arg} if isinstance(arg, str) else arg
@@ -325,6 +345,14 @@ class Runner:
                 raise ScenarioError(f"upload file not found: {', '.join(missing)}")
             self.b.upload(tid, arg["selector"], paths)
             self.pause(1.0)
+        elif kind == "clear":
+            # Masked inputs (date pickers) keep their value on fill ""; select-all + delete works.
+            mod = primary_modifier()
+            self.b.press(tid, f"{mod}+A", arg)
+            self.b.press(tid, "Backspace", arg)
+            self.pause(0.4)
+        elif kind == "download":
+            self.download(tab, arg)
         elif kind == "save":
             self.save(tab, arg)
         elif kind == "eval":
@@ -332,6 +360,7 @@ class Runner:
             if self.b.evaluate(tid, interpolate(arg)) is False:
                 raise ScenarioError(f"eval returned false: {arg[:80]}")
             self.apply_privacy(tab)
+            self.apply_single_tab(tab)
             self.pause(0.5)
         elif kind == "dialog":
             # Pre-answer native dialogs for the rest of this page (bsk blocks on a real one).
@@ -344,26 +373,84 @@ class Runner:
         else:
             raise ValueError(f"unknown action {kind}")
 
+    def download(self, tab, arg):
+        """Click `selector`, wait for the download and keep it in `<out>/downloads/` as evidence."""
+        if not hasattr(self.b, "download"):
+            raise ScenarioError("download: needs the agent-browser driver (bsk cannot capture downloads)")
+        arg = dict(arg) if isinstance(arg, dict) else {"selector": arg}
+        sel = arg["selector"]
+        name = arg.get("path") or "download.bin"
+        name = Path(name).name  # evidence stays inside downloads/, never at a caller-chosen path
+        dest_dir = self.out / "downloads"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / name
+        expr = "(()=>{const e=document.querySelector(SEL);return e&&(e.getAttribute('download')||'')})()".replace(
+            "SEL", js(sel)
+        )
+        default = self.b.evaluate(self.tabs[tab], expr)
+        if not arg.get("path") and isinstance(default, str) and default:
+            name, dest = Path(default).name, dest_dir / Path(default).name
+        self.b.download(self.tabs[tab], sel, dest)
+        if not dest.is_file():
+            raise ScenarioError(f"download {sel}: {dest.name} was not saved")
+        self.downloads.append(
+            {
+                "step": self._step_id,
+                "tab": tab,
+                "file": name,
+                "path": str(dest.relative_to(self.out)),
+                **({"append": True} if arg.get("append") else {}),
+            }
+        )
+        print(f"     download: {name} ({dest.stat().st_size} bytes)")
+        self.pause(0.8)
+
     def save(self, tab, arg):
-        """Store text/value/attribute of an element as `{{name}}` for later steps."""
+        """Store text/value/attribute of an element as `{{name}}` for later steps.
+
+        Polls until the value is ready — element found, `pattern` (a JavaScript RegExp) matches,
+        and the value is not empty (unless `allow_empty: true`) — up to `timeout` seconds
+        (default: expect_timeout), so async forms don't need a hand-written eval poll.
+        """
         attr = arg.get("attribute")
         read = f"e.getAttribute({js(attr)})" if attr else "(e.matches('input,textarea,select')?e.value:e.innerText)"
-        # `pattern` is a JavaScript RegExp, like text_matches, so it runs in the page.
+        pattern = arg.get("pattern")
         expr = (
-            f"(()=>{{const e=document.querySelector({js(arg['selector'])});if(!e)return null;"
-            f"const v=String({read}??'').trim();const p={js(arg.get('pattern'))};if(!p)return {{v}};"
-            f"let r;try{{r=new RegExp(p,{js(arg.get('flags', ''))})}}catch(x){{return {{err:x.message}}}}"
-            "const m=r.exec(v);return m?{v:m.length>1?m[1]:m[0]}:{miss:v.slice(0,80)}})()"
+            f"(()=>{{const e=document.querySelector({js(arg['selector'])});if(!e)return {{s:'missing'}};"
+            f"const v=String({read}??'').trim();"
         )
-        deadline = time.time() + self.expect_timeout
-        while not isinstance(res := self.page(tab, expr), dict) and time.time() < deadline:
+        if pattern:
+            expr += (
+                f"const p={js(pattern)};let r;try{{r=new RegExp(p,{js(arg.get('flags', ''))})}}"
+                "catch(x){return {s:'err',err:x.message}}"
+                "const m=r.exec(v);return m?{s:'ok',v:m.length>1?m[1]:m[0]}:{s:'miss',v:v.slice(0,80)}})()"
+            )
+        else:
+            expr += "return {s:'ok',v}})()"
+        timeout = float(arg.get("timeout", self.expect_timeout))
+        deadline = time.time() + timeout
+        res = None
+        while True:
+            res = self.page(tab, expr)
+            if isinstance(res, dict) and res.get("s") == "ok":
+                if pattern or arg.get("allow_empty") or res.get("v"):
+                    break
+            elif isinstance(res, dict) and res.get("s") == "err":
+                raise ScenarioError(f"save {arg['name']}: invalid pattern {pattern!r}: {res['err']}")
+            if time.time() >= deadline:
+                break
             self.pause(0.5)
         if not isinstance(res, dict):
             raise ScenarioError(f"save {arg['name']}: {arg['selector']} not found")
-        if "err" in res:
-            raise ScenarioError(f"save {arg['name']}: invalid pattern {arg['pattern']!r}: {res['err']}")
-        if "miss" in res:
-            raise ScenarioError(f"save {arg['name']}: pattern {arg['pattern']!r} not in {res['miss']!r}")
+        state = res.get("s")
+        if state == "missing":
+            raise ScenarioError(f"save {arg['name']}: {arg['selector']} not found")
+        if state == "miss":
+            raise ScenarioError(f"save {arg['name']}: pattern {pattern!r} not in {res.get('v')!r}")
+        if state == "ok" and not pattern and not arg.get("allow_empty") and not res.get("v"):
+            raise ScenarioError(f"save {arg['name']}: {arg['selector']} still empty after {timeout:g}s")
+        if state != "ok":
+            raise ScenarioError(f"save {arg['name']}: timed out waiting for {arg['selector']}")
         value = res["v"]
         self.vars[arg["name"]] = value
         self.saved[arg["name"]] = value
@@ -415,7 +502,7 @@ class Runner:
         self.retarget(tab, tg.used_in(action))
         target = arg.get("selector") if isinstance(arg, dict) else arg
         if (
-            kind in ("fill", "click", "select", "hover", "upload", "press")
+            kind in ("fill", "click", "select", "hover", "upload", "press", "clear", "download")
             and isinstance(target, str)
             and self.settings.get("auto_scroll", True)
             and not is_desktop(self.tabs[tab])
@@ -437,7 +524,7 @@ class Runner:
         except DriverError as e:
             target = arg.get("selector") if isinstance(arg, dict) else arg
             if (
-                kind in ("fill", "click", "select", "hover", "scroll", "upload", "press", "wait_for")
+                kind in ("fill", "click", "select", "hover", "scroll", "upload", "press", "clear", "download")
                 and isinstance(target, str)
                 and not tg.used_in(target)
                 and not is_desktop(self.tabs[tab])
@@ -513,6 +600,10 @@ class Runner:
         self.pause(0.6)
         self.b.press(tid, cfg["run_key"], cfg["editor"])
         self.pause(2.0)
+        try:
+            self.b.evaluate(tid, DBX_COMPACT_JS)  # results grid gets the space, not the SQL editor
+        except DriverError:
+            pass
         if cfg["error"] and self.b.evaluate(tid, f"!!document.querySelector({js(cfg['error'])})"):
             raise ScenarioError(f"sql failed in DBX: {sql[:80]}")
 
@@ -542,11 +633,29 @@ class Runner:
         self.pause(1.0)
 
     # ---------- expectations ----------
+    def resolve_file(self, path, kind):
+        """Expect pdf/xlsx `path`: scenario dir first, then this run's downloads/ and out dir."""
+        p = Path(interpolate(path))
+        base = Path(self.sc.get("_dir", "."))
+        for c in (base / p, self.out / "downloads" / p, self.out / p, p):
+            if c.is_file():
+                return c
+        raise ScenarioError(f"{kind}: file not found: {path} (looked in the scenario dir and {self.out}/downloads)")
+
+    def check_file(self, kind, arg):
+        from tirai import filescheck
+
+        path = self.resolve_file(arg["path"], kind)
+        fn = filescheck.check_pdf if kind == "pdf" else filescheck.check_xlsx
+        return fn(path, arg)
+
     def check(self, tab, exp):
         ((kind, arg),) = exp.items()
         tid = self.tabs[tab]
         if kind == "db":
             return self.check_db(arg)
+        if kind in ("pdf", "xlsx"):
+            return self.check_file(kind, arg)
         if kind == "no_console_errors":
             return self.check_console(tab, arg)
         if is_desktop(tid):
@@ -603,13 +712,17 @@ class Runner:
             )
         elif kind == "request":
             status = arg.get("status")
+            # On failure `actual` also lists the page's recent requests, so a case-sensitive
+            # miss (/print vs /Print) is visible at a glance.
             expr = (
                 "(()=>{const es=[...performance.getEntriesByType('navigation'),"
-                "...performance.getEntriesByType('resource')]"
-                f".filter(e=>e.name.includes({js(interpolate(arg['url_contains']))}));"
+                "...performance.getEntriesByType('resource')];"
+                f"const m=es.filter(e=>e.name.includes({js(interpolate(arg['url_contains']))}));"
                 f"const st={js(status)};"
-                "return [es.some(e=>st===null||e.responseStatus===st),"
-                "es.slice(-5).map(e=>e.name+' '+e.responseStatus)]})()"
+                "const fmt=e=>e.responseStatus+' '+e.name;"
+                "const ok=m.some(e=>st===null||e.responseStatus===st);"
+                "return [ok, ok ? m.slice(-5).map(fmt) : "
+                "{matched: m.slice(-5).map(fmt), recent: es.slice(-12).map(fmt)}]})()"
             )
         elif kind == "url_contains":
             expr = f"[location.href.includes({js(arg)}),location.href]"
@@ -668,7 +781,7 @@ class Runner:
             "type": "db",
             "expected": {"sql": arg["sql"], "rows": want},
             "actual": norm(got),
-            "ok": norm(got) == want,
+            "ok": dbq.db_rows_eq(norm(got), want),
         }
 
     # ---------- annotations ----------
@@ -702,6 +815,15 @@ class Runner:
             return
         self.page(tab, annotate_js() + f";__ann.mask({js(cfg)})")
 
+    def apply_single_tab(self, tab):
+        """(Re)install the `single_tab` window.open override; page loads reset it, so re-apply often."""
+        if not self.settings.get("single_tab") or is_desktop(self.tabs[tab]):
+            return
+        try:
+            self.page(tab, SINGLE_TAB_JS)
+        except DriverError:
+            pass
+
     def annotate(self, tab, items):
         if is_desktop(self.tabs[tab]):
             if items:
@@ -728,6 +850,8 @@ class Runner:
             self.b.init_scripts.append(init)
         if self.own_session and hasattr(self.b, "init_scripts") and self.targets:
             self.b.init_scripts.insert(0, tg.init_script(self.targets))  # before privacy: masks may use @targets
+        if self.own_session and hasattr(self.b, "init_scripts") and self.settings.get("single_tab"):
+            self.b.init_scripts.append(SINGLE_TAB_JS)
         try:
             return self.run_steps()
         finally:
@@ -833,6 +957,7 @@ class Runner:
             # earlier in the same step is available to the next action or check.
             step = {**step, **render({k: step[k] for k in ("title", "subtitle") if k in step}, self.vars)}
             tab = step["tab"]
+            self._step_id = step["id"]
             self.ensure_segment(tab)
             rec = {
                 "id": step["id"],
@@ -857,6 +982,7 @@ class Runner:
                     self.console_since[tab] = self.console_cursor(tab)
                 mark = self.diag_start(tab)
                 self.apply_privacy(tab)
+                self.apply_single_tab(tab)
                 follow = step.get("zoom") == "follow" or (not step.get("zoom") and self.camera == "follow")
                 halted = False
                 for action in step.get("actions", []):
@@ -870,6 +996,7 @@ class Runner:
                         continue
                     self.tracked_action(tab, render(action, self.vars, strict=True), rec, follow)
                     self.apply_privacy(tab)
+                    self.apply_single_tab(tab)
                 if not halted:
                     for x in _listify(step.get("save")):
                         self.save(tab, render(x, self.vars, strict=True))
@@ -987,6 +1114,7 @@ def run(
         **({"stopped": r.stopped} if r.stopped else {}),
         **({"from_step": from_step, "resumed_vars": r.resumed} if from_step else {}),
         **({"cleanup": r.cleanup_results} if r.cleanup_results else {}),
+        **({"downloads": r.downloads} if r.downloads else {}),
         "hold": hold,
         **({"trim_still": True} if settings.get("trim_still") else {}),
     }

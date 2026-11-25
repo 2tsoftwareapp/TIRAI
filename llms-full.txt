@@ -610,6 +610,8 @@ stable ids/names, skips ids that look generated, and leaves out elements with no
 | `upload` | `upload: { selector: "input[type=file]", file: fixtures/invoice.pdf }` (path relative to the scenario; a list for several files) |
 | `eval` | `eval: "localStorage.setItem('token', '${TOKEN}')"` — run JS in the page (seed cookies/localStorage, flags); fails if it throws or returns `false`; prefer real actions for anything the video should show |
 | `dialog` | `dialog: accept` or `dialog: dismiss` — put it before the action that opens `alert`/`confirm`/`prompt`; lasts until the page navigates |
+| `clear` | `clear: "#date"` — select-all + Backspace; clears masked inputs (date pickers) that keep their value on `fill: ""` |
+| `download` | `download: { selector: "button#print", path: report.pdf, append: true }` (agent-browser only) — clicks the element, waits for the file and keeps it in `<out>/downloads/`; the file's own `download` name is used when `path` is omitted; `append: true` adds the PDF's pages to the end of `final.mp4` |
 | `expect` | `expect: { value: { selector: "#ctrl", equals: X9 } }` (or a list) — a check between actions, e.g. before a tab switch unmounts the field; a failure stops the step |
 
 Before `click`, `fill`, `select`, `hover`, `upload` and `press` (with a selector), TIRAI scrolls the element into
@@ -634,7 +636,9 @@ match in page order, not list order; `validate` warns and suggests `targets:` fa
 | `count` | `count: { selector: "table tbody tr", equals: 3 }` |
 | `request` | `request: { url_contains: "/api/orders", status: 201 }` (any page or XHR/fetch request seen by the page; `status` optional) |
 | `no_console_errors` | `no_console_errors: {}` or `{ ignore: ["favicon"] }` (console errors/exceptions raised during this step) |
-| `db` | `db: { sql: "SELECT status FROM users WHERE id=2", rows: [{status: LOCKED}] }` (`columns:` defaults to the keys of the first expected row, in SELECT order) |
+| `pdf` | `pdf: { path: report.pdf, pages: 2 }` or `pages: [1, 3]` (range), optional `contains: "text"` (or a list) — checks the downloaded PDF; `path` resolves against the scenario dir, then `<out>/downloads/` |
+| `xlsx` | `xlsx: { path: report.xlsx, sheets: [Orders], contains: "A-1" }` — checks sheet names and cell text of the downloaded workbook |
+| `db` | `db: { sql: "SELECT status FROM users WHERE id=2", rows: [{status: LOCKED}] }` (`columns:` defaults to the keys of the first expected row, in SELECT order) — numbers compare by value, so `204000` matches `"204000.00000"` from PostgreSQL `numeric` |
 
 DOM checks retry for up to 6 s (`settings.expect_timeout: 15` for slow SPAs). `db` runs read-only against `databases.<name>.dsn` (default `default`),
 independently of what the DBX tab shows: DBX draws its result grid on a canvas, so its cells are not DOM text.
@@ -733,8 +737,10 @@ steps:
 
 - `{{name}}` comes from `vars:`, the current case, or a value saved earlier; `${NAME}` stays an environment variable.
 - Steps repeat once per case with ids `LOGIN-1`, `LOGIN-2`, … and titles prefixed `[Alice]`.
-- `save: { name, selector, attribute?, pattern?, flags? }` stores an element's value/text (first group of the
-  JavaScript RegExp `pattern` if it has one), as an action or as a step key. Values saved in one action are visible
+- `save: { name, selector, attribute?, pattern?, flags?, timeout?, allow_empty? }` stores an element's
+  value/text (first group of the JavaScript RegExp `pattern` if it has one), as an action or as a step key. It
+  polls until the value is non-empty and matches (up to `timeout` seconds, default `expect_timeout`), so async
+  forms need no `eval:` poll; `allow_empty: true` stores empty values. Values saved in one action are visible
   to the next action or check of the same step. `db: { save: { variable: column } }` stores a column of the first
   row; a missing column or an empty result is an error.
 
@@ -773,6 +779,7 @@ steps:
 | `camera: follow` | `settings:` | `zoom: follow` for every step without its own `zoom:`; `camera_factor` (default 1.6) sets the zoom |
 | `--trim-still` | `tirai record` / `compose` (or `settings.trim_still: true`) | stretches of 2 s or more where the screen does not change play at 8× with a badge; each step's start and closing `hold` stay at normal speed |
 | `fast_forward: 4` | `settings:` | `wait`/`wait_for` longer than 1.5 s play at 4× with a "4x" badge (default 4; `0` turns it off) |
+| `single_tab: true` | `settings:` | apps that open child screens with `window.open`/`target=_blank` navigate the same tab, so the screencast never freezes on the opener page (agent-browser; declare `popup: true` tabs instead when you need both pages) |
 | `--voice` | `tirai compose` | reads each subtitle aloud (macOS `say`, Windows SAPI, Linux `espeak-ng`, or `$TIRAI_TTS_CMD` with `{text}` `{out}` `{lang}`); a clip is held until its speech ends |
 
 ## Desktop apps (agent-desktop)

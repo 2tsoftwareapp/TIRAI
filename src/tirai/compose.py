@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 from tirai import export, report
-from tirai.system import ffmpeg_bin, ffprobe_bin, find_font, run_text, subtitle_font_name
+from tirai.system import ffmpeg_bin, ffprobe_bin, find_font, header_fonts, run_text, subtitle_font_name  # noqa: F401
 
 FPS = 30
 TOP, BOTTOM = 40, 64  # header bar (tab/step/status) and subtitle band
@@ -328,6 +328,55 @@ def audio_seconds(path):
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
 
 
+def append_pdf_pages(tmpd, final, tl, rec_dir, size):
+    """Append rendered pages of PDFs downloaded with `download: {append: true}` to the end of final.mp4."""
+    from tirai.filescheck import pdf_page_images
+
+    pdfs = [d for d in tl.get("downloads", []) if d.get("append") and d["file"].lower().endswith(".pdf")]
+    if not pdfs:
+        return
+    W, H = size
+    FH = H + TOP + BOTTOM
+    clips = []
+    for d in pdfs:
+        src = rec_dir / d["path"]
+        try:
+            pages = pdf_page_images(src, tmpd / "pdfpages")
+        except RuntimeError as e:
+            print(f"warning: {e}; skipping PDF pages for {d['file']}")
+            continue
+        for i, img in enumerate(pages, 1):
+            hdr = tmpd / f"pdfhdr-{d['step']}-{i}.txt"
+            hdr.write_text(f"PDF {d['file']} — page {i}/{len(pages)}", encoding="utf-8")
+            clip = tmpd / f"pdf-{d['step']}-{i}.mp4"
+            ff(
+                "-loop",
+                "1",
+                "-t",
+                "4",
+                "-i",
+                img.relative_to(tmpd).as_posix(),
+                "-vf",
+                f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"pad={W}:{FH}:0:40:color=0x111827,"
+                f"drawtext=fontfile=font-bold.ttf:textfile={hdr.name}:fontsize=22:fontcolor=white:x=20:y=8",
+                *encode_args(clip),
+                cwd=tmpd,
+            )
+            clips.append(clip)
+    if not clips:
+        return
+    listing = "".join(f"file '{final.resolve()}'\n" for _ in [0]) + "".join(f"file '{c.name}'\n" for c in clips)
+    (tmpd / "pdf-list.txt").write_text(listing)
+    out = tmpd / "final-with-pdf.mp4"
+    ff("-f", "concat", "-safe", "0", "-i", "pdf-list.txt", "-c", "copy", out.name, cwd=tmpd)
+    shutil.move(out, final)
+    tl["downloads"] = [
+        dict(d, pdf_appended=True) if d.get("append") and d["file"].lower().endswith(".pdf") else d
+        for d in tl["downloads"]
+    ]
+
+
 def ocr_check(final, tl):
     """`privacy.ocr`: warn (default when tesseract is installed), fix (blur hits), fail, or off."""
     from tirai import ocr
@@ -387,13 +436,23 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
     """Build final.mp4 (+ subtitles.srt, report.md/html/xlsx, timeline.final.json, manifest.sha256)."""
     if not ffmpeg_bin():
         raise RuntimeError("ffmpeg not found; run `tirai setup` or set FFMPEG_BIN")
-    fonts = (find_font(False), find_font(True))
-    if not fonts[0]:
-        raise RuntimeError("no font found; set TIRAI_FONT to a .ttf file")
     tl_path = Path(timeline_path)
     tl = json.loads(tl_path.read_text(encoding="utf-8"))
     if tl.get("mode") != "record":
         raise ValueError("timeline was not recorded; run `tirai run --record` first")
+    # drawtext uses one fontfile with no fallback: pick fonts that cover the header text (CJK titles need CJK fonts).
+    texts = [tl["scenario"]]
+    for s in tl["steps"]:
+        tab = tl["tabs"].get(s["tab"], {})
+        texts.append(f"{tab.get('label', s['tab'])} {s['id']} {s.get('title', '')}")
+    fonts = (header_fonts(texts, False), header_fonts(texts, True))
+    if not fonts[0][0] or not fonts[1][0]:
+        raise RuntimeError("no font found; set TIRAI_FONT to a .ttf file")
+    for i, (path, missing) in enumerate(fonts):
+        if missing:
+            msg = f"header font {'bold ' if i else ''}{path} lacks glyphs for: {missing}"
+            print(f"warning: {msg} (set TIRAI_FONT_HEADER)")
+    fonts = (fonts[0][0], fonts[1][0])
     rec_dir = tl_path.parent
     final = Path(out) if out else rec_dir / "final.mp4"
     if trim_still or tl.get("trim_still"):
@@ -460,6 +519,7 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
         )
         if voice:
             tl["voiceover"] = add_voiceover(tmpd, final, tl, voice, langs[0])
+        append_pdf_pages(tmpd, final, tl, rec_dir, size)
     ocr_check(final, tl)
 
     (rec_dir / "report.md").write_text(report_md(tl, final.name), encoding="utf-8")
