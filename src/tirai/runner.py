@@ -593,7 +593,8 @@ class Runner:
                 f".find(b=>b.innerText.trim()==={js(cfg['new_query'])}); b&&b.click(); return !!b}})()",
             )
             if opened:
-                self.pause(1.5)
+                self.b.wait_for(tid, cfg["editor"], f"{int(max(self.expect_timeout, 10))}s")
+                self.pause(0.5)
             self.dbx_select_connection(tab, cfg)
             self.dbx_editor_ready.add(tab)
         self.b.fill(tid, cfg["editor"], sql)

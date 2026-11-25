@@ -84,7 +84,7 @@ def ass_escape(text):
 
 def _ass_style(name, font, size, bold, outline, align, ml, mr, mv):
     return (
-        f"{name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,{bold},0,0,0,100,100,0,0,1,"
+        f"Style: {name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,{bold},0,0,0,100,100,0,0,1,"
         f"{outline},0,{align},{ml},{mr},{mv},1"
     )
 
@@ -93,10 +93,11 @@ def _ass_doc(play_x, styles, events):
     """PlayResY stays 288 so the subtitle style renders exactly like the old SRT force_style."""
     lines = [
         "[Script Info]",
-        f"PlayResX={play_x}",
-        "PlayResY=288",
-        "WrapStyle=0",
-        "ScaledBorderAndShadow=yes",
+        "ScriptType: v4.00+",
+        f"PlayResX: {play_x}",
+        "PlayResY: 288",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
