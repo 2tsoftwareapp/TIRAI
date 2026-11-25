@@ -107,3 +107,26 @@ def write_access(dsn: str):
         bad = [g for g in ("ALL PRIVILEGES", "INSERT", "UPDATE", "DELETE") if g in grants]
         return (False, f"user has {', '.join(bad)}") if bad else (True, "no write grants")
     return None, f"unsupported scheme {scheme!r}"
+
+
+def _scalar_eq(a, b):
+    """DB values vs scenario literals: Decimal('204000.00000') must equal 204000."""
+    if a == b:
+        return True
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        return Decimal(str(a)) == Decimal(str(b))
+    except (InvalidOperation, ValueError):
+        return False
+
+
+def db_rows_eq(got, want):
+    """Deep-compare query results (lists of dicts/lists) with numeric-string tolerance."""
+    if isinstance(got, dict) and isinstance(want, dict):
+        return got.keys() == want.keys() and all(db_rows_eq(got[k], want[k]) for k in got)
+    if isinstance(got, list) and isinstance(want, list):
+        return len(got) == len(want) and all(db_rows_eq(g, w) for g, w in zip(got, want, strict=True))
+    if isinstance(got, (dict, list)) or isinstance(want, (dict, list)):
+        return False
+    return _scalar_eq(got, want)

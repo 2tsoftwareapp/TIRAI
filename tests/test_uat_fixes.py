@@ -87,7 +87,14 @@ def test_eval_action_runs_js_and_fails_on_false():
             calls.append(expr)
             return expr != "false"
 
-    me = types.SimpleNamespace(tabs={"app": "t1"}, b=B(), apply_privacy=lambda tab: None, pause=lambda s: None, sc={})
+    me = types.SimpleNamespace(
+        tabs={"app": "t1"},
+        b=B(),
+        apply_privacy=lambda tab: None,
+        apply_single_tab=lambda tab: None,
+        pause=lambda s: None,
+        sc={},
+    )
     runner.Runner.do_action(me, "app", {"eval": "localStorage.setItem('k','v')"})
     assert calls == ["localStorage.setItem('k','v')"]
     with pytest.raises(runner.ScenarioError, match="eval returned false"):

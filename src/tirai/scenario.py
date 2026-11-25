@@ -11,10 +11,12 @@ import yaml
 ACTIONS = {
     "navigate", "fill", "click", "press", "wait", "wait_for", "sql", "dbx_login",
     "select", "hover", "scroll", "upload", "dialog", "save", "eval", "expect",
+    "clear", "download",
 }  # fmt: skip
 EXPECTS = {
     "visible", "not_visible", "text_contains", "text_matches", "url_contains",
     "value", "attribute", "count", "request", "no_console_errors", "db",
+    "pdf", "xlsx",
 }  # fmt: skip
 # Required keys for mapping-style arguments; validated up front so a dry-run never fails on a typo.
 REQUIRED = {
@@ -28,11 +30,17 @@ REQUIRED = {
     "count": ("selector", "equals"),
     "request": ("url_contains",),
     "save": ("name", "selector"),
+    "download": ("selector",),
+    "pdf": ("path",),
+    "xlsx": ("path",),
 }
+PDF_KEYS = {"path", "pages", "contains"}
+XLSX_KEYS = {"path", "sheets", "contains"}
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
 SETTINGS = {
     "hold", "timing_scale", "expect_timeout", "camera", "camera_factor", "fast_forward",
     "viewport", "auto_scroll", "strict_network", "ignore_requests", "trim_still",
+    "single_tab",
 }  # fmt: skip
 DB_KEYS = {"database", "sql", "rows", "columns", "save"}
 STEP_KEYS = {
@@ -271,6 +279,23 @@ def _check_args(kind, arg, where, errors):
             errors.append(f"{where}: db has unknown {', '.join(sorted(unknown))} (allowed: {allowed})")
         if arg.get("save") is not None and not isinstance(arg["save"], dict):
             errors.append(f"{where}: db save must map variable -> column")
+    if kind in ("pdf", "xlsx") and isinstance(arg, dict):
+        allowed = PDF_KEYS if kind == "pdf" else XLSX_KEYS
+        unknown = set(arg) - allowed
+        if unknown:
+            allowed_s = ", ".join(sorted(allowed))
+            errors.append(f"{where}: {kind} has unknown {', '.join(sorted(unknown))} (allowed: {allowed_s})")
+        pages = arg.get("pages") if kind == "pdf" else None
+        if pages is not None and not (
+            isinstance(pages, int)
+            or isinstance(pages, list)
+            and len(pages) == 2
+            and all(isinstance(x, int) for x in pages)
+        ):
+            errors.append(f"{where}: pdf pages must be an int (exact) or [min, max]")
+    if kind == "save" and isinstance(arg, dict) and arg.get("timeout") is not None:
+        if not isinstance(arg["timeout"], int | float) or arg["timeout"] <= 0:
+            errors.append(f"{where}: save timeout must be a positive number of seconds")
     if kind == "expect":
         items = arg if isinstance(arg, list) else [arg]
         for j, e in enumerate(items):
@@ -410,6 +435,8 @@ def validate(sc) -> list[str]:
         errors.append("settings.viewport: needs integer width and height")
     if settings.get("ignore_requests") is not None and not isinstance(settings["ignore_requests"], list):
         errors.append("settings.ignore_requests: must be a list of URL substrings")
+    if settings.get("single_tab") is not None and not isinstance(settings["single_tab"], bool):
+        errors.append("settings.single_tab: must be true or false")
     _check_privacy(sc.get("privacy"), errors)
     from tirai import targets as tg
 

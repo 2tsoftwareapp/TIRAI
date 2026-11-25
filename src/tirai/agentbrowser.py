@@ -134,6 +134,10 @@ class AgentBrowser:
         self.use(tab)
         return self.run("upload", selector, *(files if isinstance(files, list) else [files]))
 
+    def download(self, tab, selector, path):
+        self.use(tab)
+        return self.run("download", selector, str(path), timeout=180)
+
     def console(self, tab, since=None):
         """bsk-shaped console: {'entries': [{text, level}], 'next_since': cursor}."""
         self.use(tab)

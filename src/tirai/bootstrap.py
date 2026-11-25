@@ -430,7 +430,11 @@ class Setup:
         if state == "launch-failed" and not (IS_WINDOWS or IS_MAC):
             print("  Chrome is installed but does not start: system libraries are missing")
             if self.confirm("install Chrome's system libraries with the package manager (sudo)"):
-                if self.execute([exe, "install", "--with-deps"]) and agent_browser_state(exe) == "ok":
+                if not sudo_ready():
+                    # agent-browser shells out to `sudo apt-get` itself; without a terminal that hangs.
+                    print("  skipped: sudo needs a password and there is no terminal; run it yourself:")
+                    print(f"    {exe} install --with-deps")
+                elif self.execute([exe, "install", "--with-deps"]) and agent_browser_state(exe) == "ok":
                     return
             self.problems.append("agent-browser: Chrome does not start; run `agent-browser install --with-deps`")
         elif state != "ok":

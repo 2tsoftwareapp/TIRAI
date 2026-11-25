@@ -71,7 +71,7 @@ class FakeDriver:
 
     def evaluate(self, tab, expr):
         if "const v=String(" in expr:
-            return {"v": "ORD-42"}  # save
+            return {"s": "ok", "v": "ORD-42"}  # save
         if "return [" in expr or expr.startswith("[location"):
             return [self.ok, "actual"]
         self._log("evaluate", tab, expr[:40])

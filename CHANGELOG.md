@@ -8,6 +8,21 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 
 ### Added
 
+- `download:` action (agent-browser): clicks an element, waits for the file and keeps it in `<out>/downloads/`;
+  `expect: pdf` / `expect: xlsx` verify page count, page text and sheets of the downloaded file
+  (`pip install tirai[pdf]` for PDF rendering; `append: true` on a PDF download adds its pages to `final.mp4`).
+- `clear:` action: select-all + Backspace for masked inputs (date pickers) that keep their value on `fill: ""`.
+- `save:` waits for a non-empty/pattern-matching value (`timeout:`, `allow_empty:`), so async forms need no `eval:` poll.
+- `settings.single_tab: true`: apps that open child screens with `window.open`/`target=_blank` navigate the same
+  tab, so the screencast never freezes on the opener page.
+- DBX steps compact the SQL editor pane (30/70 split) before recording so the result grid is readable on video.
+- Video header font auto-selects a glyph-covering font (CJK titles no longer render as boxes); `TIRAI_FONT_HEADER`
+  overrides it and `tirai validate` warns about characters the chosen font lacks.
+- `tirai doctor` reports DBX as failing when it answers with `authenticated: false` (password-protected, HTTP 401).
+- `expect: request` failures list the 5 matched and 12 most recent request URLs for debugging.
+- `expect: db` compares numbers by value (`204000` matches PostgreSQL `"204000.00000"`).
+- `install.sh --source/--binary` always reinstalls that method (same-version skip only applies to the default auto mode).
+- `tirai setup` no longer hangs on `sudo` when there is no terminal; it prints the command to run instead.
 - `eval:` action: run JS in the page (e.g. seed cookies/localStorage before a flow); fails on an exception or `false`.
 - `targets:` + `@name`: name an element once with fallback locators (`testid=`, CSS, `role=…[name=…]`,
   `label=`, `placeholder=`, `text=`/`text*=`, `within:`, `nth:`); it is tagged in the page as `data-tirai-id` and

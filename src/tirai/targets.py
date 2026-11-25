@@ -13,7 +13,7 @@ TAGGED_RE = re.compile(r'\[data-tirai-id~="([\w-]+)"\]')
 LOCATOR_PREFIXES = ("testid=", "role=", "label=", "placeholder=", "text=", "text*=", "css=")
 # Keys whose string values are selectors (actions, expectations, annotate/zoom targets).
 SELECTOR_KEYS = {"selector", "target", "within"}
-SELECTOR_ACTIONS = {"click", "hover", "scroll", "wait_for", "visible", "not_visible", "zoom"}
+SELECTOR_ACTIONS = {"click", "hover", "scroll", "wait_for", "visible", "not_visible", "zoom", "clear"}
 ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
 
 
