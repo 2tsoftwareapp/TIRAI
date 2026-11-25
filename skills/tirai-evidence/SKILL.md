@@ -36,7 +36,7 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. Follow the **step-
 settings:
   pace: human
   camera: action
-  camera_factor: 1.65
+  camera_factor: 1.35              # keep gentle (1.25–1.40) so form context stays readable
   action_annotate: true
   show_expects: true
   spotlight: true
