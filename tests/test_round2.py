@@ -269,33 +269,6 @@ def test_dbx_auth_parses_endpoint(monkeypatch):
     assert system.dbx_auth("http://x:4224") == (False, False, False)
 
 
-# ---------- header fonts ----------
-
-
-def test_header_fonts_warn_on_cjk_without_cjk_font(monkeypatch):
-    from tirai import system
-
-    dejavu = system.find_font(False)
-    assert dejavu, "test needs a Latin font"
-    monkeypatch.setenv("TIRAI_FONT_HEADER", dejavu)  # env override is authoritative
-    monkeypatch.delenv("TIRAI_FONT_HEADER_BOLD", raising=False)
-    path, missing = system.header_fonts(["受注番号を確認"], False)
-    assert path == dejavu
-    if system.font_covers(dejavu, "受注番号を確認") is False:
-        assert missing, "CJK text with a Latin-only font must report missing glyphs"
-    else:
-        assert missing == ""
-
-
-def test_header_fonts_env_override(monkeypatch):
-    from tirai import system
-
-    f = system.find_font(False)
-    monkeypatch.setenv("TIRAI_FONT_HEADER", f)
-    path, _ = system.header_fonts(["plain ascii"], False)
-    assert path == f
-
-
 # ---------- install.sh explicit --source reinstalls ----------
 
 

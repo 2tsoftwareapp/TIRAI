@@ -109,13 +109,17 @@ class AgentBrowser:
 
     def click(self, tab, selector):
         self.use(tab)
-        return self.run("click", selector)
+        out = self.run("click", selector)
+        self.active = None  # a click may open a popup that Chrome focuses; re-select next time
+        return out
 
     def press(self, tab, key, selector=None):
         self.use(tab)
         if selector:
             self.run("focus", selector)
-        return self.run("press", _key(key))
+        out = self.run("press", _key(key))
+        self.active = None  # Enter on a link may open a popup tab that Chrome focuses
+        return out
 
     def select(self, tab, selector, values):
         self.use(tab)
@@ -136,7 +140,9 @@ class AgentBrowser:
 
     def download(self, tab, selector, path):
         self.use(tab)
-        return self.run("download", selector, str(path), timeout=180)
+        out = self.run("download", selector, str(path), timeout=180)
+        self.active = None  # the download click may open a popup that Chrome focuses
+        return out
 
     def console(self, tab, since=None):
         """bsk-shaped console: {'entries': [{text, level}], 'next_since': cursor}."""
