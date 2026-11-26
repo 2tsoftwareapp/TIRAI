@@ -8,6 +8,26 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 
 ### Added
 
+- `tirai suite <files|dirs>`: runs many scenarios (one `tirai` process each; `--parallel N` with agent-browser),
+  then writes `suite.md`, one `junit.xml` (a testsuite per scenario) and `index.html`.
+- GitHub Action (`action.yml`): installs TIRAI, ffmpeg and agent-browser, runs `tirai suite` headless, puts the
+  summary on the job page and uploads the evidence. CI runs `examples/ci/smoke.yaml` end to end through it.
+- `settings.device`, `settings.locale`, `settings.timezone`, `settings.color_scheme` (agent-browser): phone
+  emulation (size and user agent, no touch), language, time zone and dark/light mode for every tab. The values
+  are read back from the page (a setting the browser did not take fails the run) and shown on the title card.
+  Portrait recordings get a 16:9 frame.
+- `tirai diff <old> <new>`: compares each step's screenshot between two runs (`diff.html` with old | new |
+  changes, `diff.json`; exit 1 when a step changed). `pip install tirai[diff]`.
+- `tirai record --from-step S7 --session …`: records from that step on the open page and splices it into the
+  earlier recording (replaced segments move to `record/replaced/`; the title card says what was re-recorded).
+  On agent-browser it resumes from a browser checkpoint (cookies, storage, URLs) saved after every passed recorded
+  step in `~/.tirai/checkpoints/`, so the kept steps never run again; bsk needs a `--session` prepared by
+  `tirai run --dry-run --until <previous step> --keep-session`.
+- `{{run_id}}`: a value unique per run (reused by `--from-step`), for data that must not collide.
+- `databases.<name>.reset | snapshot | restore` shell commands: reset before a full recording, snapshot before
+  each `writes:` step, restore the snapshot of the first replaced write step on `record --from-step`.
+  `tirai validate` hints at write steps with no cleanup, hook or `{{run_id}}`.
+
 - Annotations: `underline` and `strike` shapes; `style: error | warning | info | success` presets; `badge` numbers
   itself when `n` is omitted and takes `pos:`; overlapping labels in a step move apart; arrows stay inside the frame.
 - The video header bar shows step progress (`3/10`); long subtitles shrink to fit the subtitle band.
@@ -61,6 +81,7 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 
 ### Fixed
 
+- Long title-card lines and step headers are cut to one line (`…`) instead of wrapping onto the next line.
 - Privacy masks follow their text every frame, rescan on text edits (characterData changes were ignored), and cover
   open shadow roots and same-origin iframes. A mask that cannot start at page load covers the page (fail closed).
 - Annotations re-resolve targets that a framework re-rendered and hide while the target is gone, instead of

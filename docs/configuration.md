@@ -6,7 +6,8 @@ Nothing is tied to one OS or install location. Every external tool, font and tim
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TIRAI_HOME` | `~/.tirai` | where setup puts ffmpeg, agent-browser (`bin/`) and DBX web (`dbx/`) |
+| `TIRAI_HOME` | `~/.tirai` | where setup puts ffmpeg, agent-browser (`bin/`) and DBX web (`dbx/`); browser checkpoints for `record --from-step` go to `checkpoints/` |
+| `AGENT_BROWSER_ENCRYPTION_KEY` | unset | 64 hex chars: agent-browser encrypts the checkpoints (they hold log-in cookies) |
 | `TIRAI_DRIVER` | `agent-browser` if installed, else `bsk` | browser driver (scenario `driver:` and `--driver` win) |
 | `TIRAI_HEADED` | off | show the agent-browser window (same as `--headed`) |
 | `TIRAI_CURSOR` | `1` | draw agent-browser's animated cursor in recordings |
@@ -47,7 +48,25 @@ settings:
   camera: follow       # zoom + pan to each action target (or per step: zoom: follow)
   camera_factor: 1.6
   fast_forward: 4      # speed of long waits in the video; 0 = real time
+  device: "iPhone 14"  # agent-browser emulation: device, locale, timezone, color_scheme (every tab)
+  locale: ja-JP
+  timezone: Asia/Tokyo
+  color_scheme: dark
 ```
+
+## Database hooks
+
+```yaml
+databases:
+  default:
+    dsn: "${EV_DB_DSN}"   # read-only: expect: db and DBX
+    reset: '...'          # before every full recording
+    snapshot: '... {snapshot}'   # before each writes: step while recording
+    restore: '... {snapshot}'    # on record --from-step
+```
+
+Shell commands run with the scenario's environment (`$VAR` for secrets). They need the database owner, not the
+read-only `dsn` user. See [Steps that write data](scenario-format.md#making-steps-that-write-data-safe-to-run-again).
 
 ## DBX tab overrides
 

@@ -91,7 +91,7 @@ def check_databases(sc):
 
 
 def cmd_validate(args):
-    from tirai.scenario import ScenarioError, env_vars, load, step_writes
+    from tirai.scenario import ScenarioError, env_vars, load, step_writes, write_safety
 
     load_env(args)
     try:
@@ -107,6 +107,12 @@ def cmd_validate(args):
     if writes:
         print("writes data: " + "; ".join(f"{i} ({w})" for i, w in writes))
         print("  a dry-run stops before the first of these unless --allow-writes; use cleanup: to undo them")
+        unsafe = write_safety(sc)
+        if unsafe:
+            print(
+                f"hint: {', '.join(unsafe)} write data and nothing makes a second run safe; add cleanup:, a "
+                "databases.<name>.reset/snapshot command, or {{run_id}} in the values they write"
+            )
     for sid, sel in comma_selectors(sc):
         print(f"warning: {sid}: {sel!r} is a CSS list; the first match in page order wins. Prefer targets: fallbacks")
     env = env_file_unignored(args.scenario)
@@ -151,10 +157,10 @@ def cmd_run(args):
         os.environ["TIRAI_HEADED"] = "1"
     from tirai.bsk import DriverError
 
-    if args.record and (args.from_step or args.until):
-        print("--from-step/--until are for dry-runs; a recording always covers the whole scenario")
+    if args.record and args.until:
+        print("--until is for dry-runs; a recording runs to the end (use --from-step to re-record the tail)")
         return 2
-    if args.from_step and not args.session:
+    if args.from_step and not args.session and not args.record:
         print("--from-step needs --session <name> (keep one with --keep-session) so the page state carries over")
         return 2
     try:
@@ -225,8 +231,13 @@ def cmd_compose(args):
 def cmd_record(args):
     """dry-run -> record -> compose; stops at the first phase that fails unless --record-failures."""
     args.record = False
-    args.until = args.from_step = None
+    from_step, args.until, args.from_step = args.from_step, None, None
     keep, args.keep_session = args.keep_session, False
+    if from_step and not args.skip_dry_run:
+        # A dry-run here would run the tail and move the page past the step being re-recorded.
+        where = "the open page of --session" if args.session else "the browser checkpoint of the earlier recording"
+        print(f"--from-step {from_step}: skipping the dry-run; recording from {where}")
+        args.skip_dry_run = True
     if not args.skip_dry_run and cmd_run(args):
         if not args.record_failures:
             print("dry-run failed; fix the scenario before recording (or pass --record-failures for bug evidence)")
@@ -234,6 +245,7 @@ def cmd_record(args):
         print("dry-run failed; recording anyway up to the first failing step (--record-failures)")
     args.record = True
     args.keep_session = keep
+    args.from_step = from_step
     failed = cmd_run(args)
     if failed and not args.record_failures:
         return 1
@@ -313,6 +325,52 @@ def cmd_scan_pii(args):
         print(f"error: {e}")
         return 2
     return 1 if hits else 0
+
+
+def cmd_suite(args):
+    from tirai import suite
+
+    driver = args.driver or os.environ.get("TIRAI_DRIVER")
+    if args.parallel > 1 and driver == "bsk":
+        print("--parallel needs agent-browser: BrowserSkill drives your one real browser, so runs would collide")
+        return 2
+    extra = [*(["--driver", args.driver] if args.driver else []), *(["--headed"] if args.headed else [])]
+    extra += ["--fresh"] if args.fresh else []
+    extra += ["--record-failures"] if args.record_failures and not args.dry_run else []
+
+    def done(r):
+        steps = f" {r['passed']}/{r['total']} steps" if "total" in r else f" ({r.get('error', '')[:120]})"
+        print(
+            f"[{r['status'].upper()}] {r['scenario']}:{steps} in {r['seconds']}s -> {args.out}/{r['dir']}/", flush=True
+        )
+
+    try:
+        results = suite.run(
+            args.paths, args.out, record=not args.dry_run, parallel=args.parallel, extra=extra, on_done=done
+        )
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}")
+        return 1
+    ok = sum(r["status"] == "passed" for r in results)
+    out = Path(args.out)
+    print(f"\n{ok}/{len(results)} scenarios passed; summary: {out / 'suite.md'}, junit: {out / 'junit.xml'}")
+    return 0 if ok == len(results) else 1
+
+
+def cmd_diff(args):
+    from tirai import visual
+
+    try:
+        rep = visual.diff(args.old, args.new, args.out, threshold=args.threshold)
+    except (FileNotFoundError, RuntimeError) as e:
+        print(f"error: {e}")
+        return 2
+    for r in rep["steps"]:
+        detail = r.get("note") or f"{r['changed_pct']}% changed" + (", size changed" if r.get("size_changed") else "")
+        print(f"[{r['status'].upper()}] {r['id']} {r['title']}: {detail}")
+    changed = sum(r["status"] != "same" for r in rep["steps"])
+    print(f"\n{changed}/{len(rep['steps'])} steps differ; report: {Path(args.out) / 'diff.html'}")
+    return 1 if changed else 0
 
 
 def cmd_index(args):
@@ -623,7 +681,12 @@ def build_parser():
             "--allow-writes", action="store_true", help="dry-run: also run steps that write data (writes:, write SQL)"
         )
         s.add_argument("--until", metavar="STEP", help="dry-run: stop after this step")
-        s.add_argument("--from-step", metavar="STEP", help="dry-run: start at this step in --session's open page")
+        s.add_argument(
+            "--from-step",
+            metavar="STEP",
+            help="start at this step in --session's open page; when recording, replace this step and the ones "
+            "after it in the earlier recording in --out",
+        )
 
     def compose_opts(s):
         s.add_argument("--output", help="final video path (default: <timeline dir>/final.mp4)")
@@ -672,6 +735,28 @@ def build_parser():
         "--record-failures", action="store_true", help="record and compose even when a step fails (bug evidence)"
     )
     s.set_defaults(fn=cmd_record)
+
+    s = sub.add_parser("suite", help="run many scenarios (files or folders), then one summary, junit.xml and index")
+    s.add_argument("paths", nargs="+", help="scenario files or folders searched for scenarios")
+    s.add_argument(
+        "--out", default="evidence/suite", help="output root, one folder per scenario (default: evidence/suite)"
+    )
+    s.add_argument("--parallel", "-j", type=int, default=1, help="scenarios run at once (agent-browser only)")
+    s.add_argument("--dry-run", action="store_true", help="dry-run each scenario instead of recording it")
+    s.add_argument("--driver", choices=["agent-browser", "bsk"], help="browser driver (default: agent-browser)")
+    s.add_argument("--headed", action="store_true", help="show the agent-browser windows")
+    s.add_argument("--fresh", action="store_true", help="clear cookies and storage before each scenario's tab setup")
+    s.add_argument("--record-failures", action="store_true", help="record and compose scenarios that fail too")
+    s.set_defaults(fn=cmd_suite)
+
+    s = sub.add_parser("diff", help="compare the per-step screenshots of two runs (visual regression)")
+    s.add_argument("old", help="earlier evidence folder (or its record/ folder)")
+    s.add_argument("new", help="later evidence folder")
+    s.add_argument("--out", default="evidence/diff", help="report folder (default: evidence/diff)")
+    s.add_argument(
+        "--threshold", type=float, default=0.5, help="%% of pixels a step may change and still count as same"
+    )
+    s.set_defaults(fn=cmd_diff)
 
     s = sub.add_parser("install-skill", help="install the tirai-evidence skill for an agent")
     s.add_argument("--agent", action="append", choices=[*TARGETS, "all"], required=True)

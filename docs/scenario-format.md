@@ -188,6 +188,70 @@ tirai run flow.yaml --dry-run --session tirai-1234 --from-step S14
 saved by the previous run in the same `--out` folder. `--fresh` clears cookies and storage before tab setup, so
 the run starts logged out instead of reusing an old session (bsk cannot clear HttpOnly cookies).
 
+### Re-recording the end of a recording
+
+When a long recording fails near the end (a flaky step, or a fix to the scenario), record only the tail and
+splice it into the earlier recording instead of recording everything again:
+
+```bash
+tirai record flow.yaml --from-step S14        # agent-browser: resumes from the checkpoint after S13
+```
+
+While recording on agent-browser, TIRAI saves a browser checkpoint after every passed step: cookies, local and
+session storage of every origin, and the URL of each tab. It lives in `~/.tirai/checkpoints/` (it holds log-in
+cookies, so never in the evidence folder; set `AGENT_BROWSER_ENCRYPTION_KEY` to encrypt it) and is cleared by the
+next full recording. `tirai record --from-step S14` skips the dry-run, opens a fresh browser with the checkpoint
+after S13 (no tab `setup:`, no re-login), records S14 and every later step, and replaces them in `<out>/record/`.
+S1..S13 do not run again, so nothing they wrote is written twice.
+
+- The kept steps must have passed. Segments only the replaced steps used move to `record/replaced/`,
+  `timeline.json` lists the splice under `spliced`, and the title card shows `re-recorded from: S14`.
+- `{{run_id}}` and the values saved by `save:` are those of the original recording.
+- Page state that lives only in memory (a half-filled wizard) is not in a checkpoint: re-record from the step
+  that starts that screen.
+- Popup windows (`popup: true` tabs) are not in a checkpoint: re-record from the step on the main tab that opens
+  the popup.
+- Checkpoint files hold log-in cookies in plain JSON (readable only by you) unless `AGENT_BROWSER_ENCRYPTION_KEY`
+  is set; they stay until the next full recording into the same `--out`, or until you delete
+  `~/.tirai/checkpoints/`.
+- When a replaced step wrote data, the attempt that failed may have written it already. With
+  `databases.<name>.snapshot`/`restore` (below) TIRAI restores the snapshot taken before the first replaced
+  step that writes, so the data is back to where it was.
+- bsk (or a recording without checkpoints): prepare a session yourself and pass it:
+  `tirai run flow.yaml --dry-run --until S13 --keep-session --session fix`, then
+  `tirai record flow.yaml --from-step S14 --session fix`. That dry-run runs S1..S13 again (it stops before a
+  `writes:` step unless `--allow-writes`, which writes that data a second time); saved values then come from it.
+
+### Making steps that write data safe to run again
+
+A database transaction cannot undo what the app wrote: the app commits each request on its own connections
+before the page shows the result, and TIRAI's database connection is a separate, read-only one. Pick what fits:
+
+| Case | Use |
+|---|---|
+| Values that must be unique (email, order no., name) | `{{run_id}}` in them: `value: "order-{{run_id}}"`. Unique per run (`1126143917` + 4 hex), reused by `--from-step` |
+| A test database you can reset | `databases.<name>.reset`: runs before every full recording |
+| Long flow that writes, may need `--from-step` | `databases.<name>.snapshot` + `restore`: snapshot before each `writes:` step while recording; restore on `--from-step` |
+| Shared database, no admin access | `cleanup:` steps that delete what the run created (use the ids from `save:`) |
+| Data you cannot delete or duplicate | Record once (`tirai record` dry-runs only up to the first write step); re-record from the first write step at the earliest |
+
+```yaml
+databases:
+  default:
+    dsn: "${EV_DB_DSN}"            # read-only user: checks and DBX
+    # The hooks need the database owner, not the read-only user, and PostgreSQL tools of the server's version
+    # (a newer pg_dump writes settings an older server rejects), so run them inside the database container:
+    reset: 'docker compose exec -T db psql -U demo -d shop -f /fixtures/reset.sql'
+    snapshot: 'docker compose exec -T db pg_dump -U demo -Fc -f "/tmp/{snapshot}.dump" shop'
+    restore: 'docker compose exec -T db pg_restore -U demo --clean --if-exists -d shop "/tmp/{snapshot}.dump"'
+    # SQLite: snapshot: 'cp "$DB_FILE" "/tmp/{snapshot}.db"'  restore: 'cp "/tmp/{snapshot}.db" "$DB_FILE"'
+```
+
+`pg_restore --clean` works while the app keeps its connections open. The commands run in the system shell (`sh`; `cmd` on Windows) with the scenario's environment: write secrets as
+`$VAR` so the shell expands them and they never appear on the command line. `{snapshot}` is a name per output
+folder and step (`tirai_<8 hex>_<step>`). A command that fails stops the run. `tirai validate` hints at write
+steps that have none of `cleanup:`, a reset/snapshot hook or `{{run_id}}`.
+
 ## Popup windows
 
 ```yaml
@@ -204,6 +268,24 @@ closes and a new one opens, the next step binds again.
 
 `settings.viewport: { width: 1600, height: 900 }` sets the page size on agent-browser (each tab and popup).
 bsk uses the size of your browser window.
+
+## Device, language, time zone and color scheme
+
+```yaml
+settings:
+  device: "iPhone 14"        # agent-browser device name: user agent and screen size
+  locale: ja-JP              # navigator.language and Accept-Language
+  timezone: Asia/Tokyo       # IANA name; dates and Intl in the page use it
+  color_scheme: dark         # prefers-color-scheme: dark | light
+```
+
+agent-browser only (a `bsk` run fails with a clear error). TIRAI reads the time zone, language and color scheme
+back from the first page and fails the run when the browser did not take one, so the evidence never claims a
+setting that was not in effect. The values are printed on the title card. `device` keeps the phone's size and
+user agent at pixel ratio 1 (agent-browser misplaces clicks on high-DPI emulation while recording); a portrait
+recording is centred in a 16:9 frame so the header bar and subtitles keep their layout. Touch events are not
+emulated. The settings apply to every tab of the session, so `device` cannot be combined with a `kind: dbx` tab
+(the grid would be phone-sized) or with `viewport`.
 
 ## Recording model
 

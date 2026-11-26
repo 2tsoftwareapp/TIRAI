@@ -84,3 +84,15 @@ tirai validate scenarios/my-feature.yaml
 ```
 
 Write steps as *action + expect*, see [scenario format](scenario-format.md) and [annotations](annotations.md).
+
+## 4. Many scenarios, CI and re-runs
+
+```bash
+tirai suite scenarios/ -j 2                  # every scenario, one summary + junit.xml + index.html
+tirai diff evidence/old evidence/new         # what changed on screen between two runs
+tirai record scenarios/order.yaml --from-step S7   # re-record only the end of a failed recording
+```
+
+In GitHub Actions, use this repository as an action (`uses: 2tsoftwareapp/TIRAI@main`, see the README). Steps
+that create data: use `{{run_id}}`, `cleanup:` or database `reset`/`snapshot`/`restore` hooks
+([details](scenario-format.md#making-steps-that-write-data-safe-to-run-again)).

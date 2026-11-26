@@ -36,6 +36,9 @@ TIRAI turns it into a repeatable artifact:
 - **Web and desktop.** Browser tabs run on agent-browser or BrowserSkill; native apps (`app:` tabs) run on [agent-desktop](https://github.com/vercel-labs/agent-desktop) through the accessibility tree.
 - **Watchable video.** Camera follow (zoom and pan between targets), fast-forwarded waits, chapters, multilingual subtitles and optional voice-over.
 - **Evidence you can hand over.** PII masking plus an OCR pass over the final video, `manifest.sha256` with SSH signature and RFC 3161 timestamp, JUnit/Xray/TestRail files, and one HTML index across runs.
+- **Suites, CI and regressions.** `tirai suite` runs many scenarios (in parallel) into one summary and JUnit file, the repo doubles as a GitHub Action, and `tirai diff` compares each step's screenshot between two runs.
+- **Re-record only what failed.** `record --from-step` resumes from a browser checkpoint and splices the new tail into the video; database snapshot/restore hooks and `{{run_id}}` keep steps that write data from duplicating it.
+- **Phones, languages, time zones.** `settings.device`, `locale`, `timezone` and `color_scheme` emulate them on agent-browser and are verified against the page.
 - **Built for agents.** Ships as a skill for Claude Code, Codex, Antigravity, Cursor and Devin. Every command also works by hand.
 
 <table>
@@ -229,7 +232,7 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 | `tirai init <file>` | Write a scenario template |
 | `tirai validate <file>` | Check structure, required environment variables, steps that write data and read-only DSNs |
 | `tirai run <file> --dry-run \| --record` | Execute steps, optionally recording; a dry-run stops before `writes:` steps unless `--allow-writes` (`--until`, `--keep-session` + `--from-step`, `--fresh`) |
-| `tirai record <file>` | Dry-run, record and compose in one go (`--record-failures`: keep going and record bug evidence) |
+| `tirai record <file>` | Dry-run, record and compose in one go (`--record-failures`: keep going and record bug evidence; `--from-step S7 --session …`: re-record the tail and splice it in) |
 | `tirai verify [dir]` | Check an evidence folder against its `manifest.sha256` |
 | `tirai compose <timeline.json>` | Rebuild the video and report from a recorded timeline |
 | `tirai inspect <file\|url>` | List every step's page elements with unique locators and write a ready `targets:` block (use as `@name`) |
@@ -242,13 +245,36 @@ Anything else: `tirai install-skill --dest <dir>`. See [agents](docs/agents.md).
 | `tirai sign <dir> --key <ssh key> [--tsa]` | Sign `manifest.sha256` (`ssh-keygen -Y`), optional RFC 3161 timestamp; `verify --pubkey` checks it |
 | `tirai scan-pii <dir> [--fix]` | OCR the final video for PII (incl. canvas text) and optionally pixelate hits |
 | `tirai index <dirs…> -o index.html` | One filterable HTML page for many evidence runs |
+| `tirai suite <files\|dirs…> [-j N]` | Run many scenarios (one process each, `--parallel` with agent-browser): `suite.md`, one `junit.xml`, `index.html` |
+| `tirai diff <old> <new>` | Compare each step's screenshot between two runs; `diff.html` shows old \| new \| changes (`pip install tirai[diff]`) |
 | `tirai compose … --voice` | Add spoken subtitles (say / SAPI / espeak-ng / custom) |
+
+## In CI (GitHub Actions)
+
+The repository is also a GitHub Action: it installs TIRAI, ffmpeg and agent-browser, runs `tirai suite` headless,
+writes the summary to the job page and uploads the evidence folder as an artifact.
+
+```yaml
+- uses: actions/checkout@v4
+- run: docker compose up -d          # start the app under test
+- uses: 2tsoftwareapp/TIRAI@main
+  with:
+    scenarios: evidence-scenarios/   # files or folders
+    args: --parallel 2               # any `tirai suite` option
+    extras: postgres                 # pip extras for `expect: db`
+  env:
+    APP_URL: http://localhost:3000
+    APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+```
+
+Outputs: `exit-code`. Inputs: `out` (default `evidence/suite`), `artifact-name`, `fail-on-error` (default `true`,
+applied after the upload), `python-version`. TIRAI's own CI runs `examples/ci/smoke.yaml` through this action.
 
 ## Security
 
 - **Secrets** are referenced as `${ENV_VAR}` (shell or a git-ignored `.env`) and never written to timelines, reports or video metadata.
 - **Database access is read-only**: use a read-only user for both DBX and `expect: db`; `tirai validate` warns when a DSN can write.
-- **Shared test data**: steps marked `writes:` don't run in a dry-run unless `--allow-writes`; `cleanup:` undoes them and the report lists what was written.
+- **Shared test data**: steps marked `writes:` don't run in a dry-run unless `--allow-writes`; `cleanup:`, `{{run_id}}` and `databases.<name>.reset/snapshot/restore` hooks keep re-runs from duplicating data, `record --from-step` resumes from a browser checkpoint instead of running the earlier steps again, and the report lists what was written.
 - **`tirai init`** adds `**/.env` and `evidence/` to `.gitignore`.
 - **Blur is instant**: masks render before the next frame, so sensitive values never appear in the recording.
 - **Automatic PII masking** (`privacy:`): emails, phones, cards, tokens and custom patterns are covered on every page; `privacy.ocr` / `tirai scan-pii` OCR the final video to catch text drawn on canvas (DBX grids, desktop apps).

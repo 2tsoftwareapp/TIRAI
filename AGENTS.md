@@ -13,9 +13,12 @@ TIRAI records test evidence videos from YAML scenarios. Using it in another proj
 | `src/tirai/bsk.py` | wrapper over the `bsk` CLI (sync before every action) |
 | `src/tirai/compose.py` | ffmpeg composition: clips, header bar, title card, subtitles, report |
 | `src/tirai/db.py` | read-only queries for `expect: db` |
+| `src/tirai/suite.py` | `tirai suite`: many scenarios, one process each, aggregate junit/summary |
+| `src/tirai/visual.py` | `tirai diff`: per-step screenshot comparison between two runs |
 | `src/tirai/assets/annotate.js` | injected annotation overlay |
 | `skills/tirai-evidence/` | the agent skill (also packaged into the wheel and the Claude plugin) |
 | `examples/demo/` | demo app + PostgreSQL + DBX stack and the reference scenario |
+| `examples/ci/`, `action.yml` | smoke page + scenario run end-to-end in CI through the repo's GitHub Action |
 
 ## Commands
 

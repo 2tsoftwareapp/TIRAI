@@ -126,7 +126,12 @@ def frame_size(tl, rec_dir):
         w, h = (int(v) for v in env.lower().split("x"))
         return w - w % 2, h - h % 2
     sizes = [video_size(rec_dir / s["segment"]) for s in tl["steps"] if s.get("segment")]
-    return max(sizes, key=lambda s: s[0] * s[1]) if sizes else DEFAULT_SIZE
+    w, h = max(sizes, key=lambda s: s[0] * s[1]) if sizes else DEFAULT_SIZE
+    if h > w:
+        # Portrait (phone emulation): a 16:9 frame of the same height, the recording centred in it, so the
+        # header bar, subtitles and title card keep their landscape layout.
+        w = round(h * 16 / 9) // 2 * 2
+    return w, h
 
 
 def ts(sec):
@@ -295,27 +300,36 @@ def build_ass(tl, size, title_seconds):
     cx = round(play_x / 2)
     end_title = ass_ts(title_seconds)
 
-    def title_line(text, style, dy, a=None, b=end_title):
+    def title_line(text, style, dy, a=None, b=end_title, px=None):
         # drawtext centred with y=(h-text_h)/2+dy; \an5 + \pos does the same in script units.
+        # With `px` (font size) the line is cut to one line: a wrapped line would run into the next one.
         y = round((fh / 2 + dy * cs) * k)
+        if px:
+            text = clip_em(text, 0.92 * W / (px * cs))
         return (a or ass_ts(0), b, style, ass_escape(f"{{\\pos({cx},{y})}}{text}"))
 
     events = [
         title_line(tl["scenario"], "T1", -60),
-        title_line(f"{passed}/{len(tl['steps'])} steps passed  ·  recorded {tl['created']}", "T2", 10),
+        title_line(f"{passed}/{len(tl['steps'])} steps passed  ·  recorded {tl['created']}", "T2", 10, px=24),
         title_line(
-            f"Evidence: {DRIVER_NAMES.get(tl.get('driver'), 'browser')} recording + TIRAI annotations", "T3", 60
+            f"Evidence: {DRIVER_NAMES.get(tl.get('driver'), 'browser')} recording + TIRAI annotations",
+            "T3",
+            60,
+            px=20,
         ),
     ]
     if tl.get("meta"):
-        events.append(title_line("  ·  ".join(f"{key}: {val}" for key, val in tl["meta"].items()), "T3", 100))
+        meta = "  ·  ".join(f"{key}: {val}" for key, val in tl["meta"].items())
+        events.append(title_line(meta, "T3", 100, px=20))
     if tl.get("summary"):
         events += summary_events(tl, th, (W, fh), k, title_line)
     total = len(tl["steps"])
     for n, s in enumerate(tl["steps"], 1):
         a, b = ass_ts(s["final_start"]), ass_ts(s["final_end"])
         label = tl["tabs"].get(s["tab"], {}).get("label", s["tab"])
-        events.append((a, b, "Hdr", ass_escape(f"{label}   |   {n}/{total}   {s['id']}  {s.get('title', '')}")))
+        hdr = f"{label}   |   {n}/{total}   {s['id']}  {s.get('title', '')}"
+        hdr_room = (W - 16 - 110 * cs) / th["header_size"]  # header width left of the PASS/FAIL badge, in em
+        events.append((a, b, "Hdr", ass_escape(clip_em(hdr, hdr_room))))
         sub_a = ass_ts(s["final_start"] + 0.2)
         sub_b = ass_ts(max(s["final_start"] + 0.3, s["final_end"] - 0.1))
         raw_sub = str(s.get("subtitle") or s.get("title", ""))

@@ -4,9 +4,12 @@ dry-run: run every step and check expectations (no video) to find failing steps.
 record:  same flow, one MP4 per contiguous tab block, plus timeline.json for `tirai compose`.
 """
 
+import hashlib
 import json
 import os
+import secrets
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -17,8 +20,8 @@ from tirai.agentbrowser import make_driver
 from tirai.bsk import DriverError
 from tirai.desktop import MixedDriver, is_desktop
 from tirai.resources import annotate_js, annotate_version
-from tirai.scenario import ScenarioError, interpolate, render, step_writes
-from tirai.system import primary_modifier
+from tirai.scenario import EMULATION, ScenarioError, interpolate, render, step_writes
+from tirai.system import TIRAI_HOME, primary_modifier
 
 # `settings.single_tab`: window.open / target=_blank navigate in the same tab, so one screencast
 # follows the whole flow (for apps that open child screens in popups).
@@ -124,10 +127,18 @@ class Runner:
         self.seen_tabs = set()
         self.out = out
         self.scope = scope
+        self.seg_offset = 0  # segments already in the folder (a --from-step recording adds to them)
+        settings_ = scenario.get("settings") or {}
+        self.emulation = {k: settings_[k] for k in EMULATION if settings_.get(k)}
+        self.emulation_seen = None
+
+        def browser():
+            return with_emulation(make_driver(driver or scenario.get("driver"), session), self.emulation)
+
         if any("app" in (cfg or {}) for cfg in scenario["tabs"].values()):
-            self.b = MixedDriver(lambda: make_driver(driver or scenario.get("driver"), session))
+            self.b = MixedDriver(browser)
         else:
-            self.b = make_driver(driver or scenario.get("driver"), session)
+            self.b = browser()
         self.record = record
         self.hold = hold
         self.stop_on_fail = stop_on_fail
@@ -136,6 +147,9 @@ class Runner:
         self.console_since = {}
         self.vars = dict(resume_vars or {})
         self.resumed = dict(resume_vars or {})
+        self.run_id = self.vars.setdefault("run_id", new_run_id())
+        self.checkpoint = None  # {"state": path, "urls": {tab: url}}: resume a recording without a prepared session
+        self.snapshots = {}  # step id -> snapshot name taken before that write step
         self.targets = scenario.get("_targets") or tg.normalize(scenario.get("targets"))
         self.warnings = []
         self.inspect = False
@@ -213,6 +227,8 @@ class Runner:
                     self.do_action(name, action)
                 continue
             url = interpolate(cfg["url"])
+            if self.checkpoint:
+                url = self.checkpoint["urls"].get(name, url)
             if resume:
                 # --from-step: continue on the page the earlier run left open (state, login) instead of a new tab.
                 taken = set(self.tabs.values())
@@ -227,19 +243,23 @@ class Runner:
             self.provision_dbx(cfg)
             if not self.b.session:
                 self.tabs[name] = self.b.open_session(url, self.scope)
+                if self.checkpoint:
+                    # Log-in cookies and storage as they were after the last kept step, then reload with them.
+                    self.b.state_load(self.checkpoint["state"])
+                    self.b.navigate(self.tabs[name], url)
             else:
                 self.tabs[name] = self.b.tab_create(url)
             self.pause(1.5)
             self.b.sync(self.tabs[name])
             self.check_loaded(name, url)
-            if self.fresh and hasattr(self.b, "clear_state"):
+            if self.fresh and hasattr(self.b, "clear_state") and not self.checkpoint:
                 # Cookies are per browser session: clear them once, before any tab's setup logs in.
                 self.b.clear_state(self.tabs[name], cookies=not cleared)
                 cleared = True
                 self.b.navigate(self.tabs[name], url)
                 self.pause(1.0)
             self.prepare_tab(name)
-            for action in cfg.get("setup", []):
+            for action in [] if self.checkpoint else cfg.get("setup", []):  # a checkpoint is already set up
                 self.do_action(name, action)
         if resume:
             self.seen_tabs = set(self.tabs.values())  # popups left open by the earlier run can be adopted
@@ -253,6 +273,7 @@ class Runner:
         vp = self.settings.get("viewport")
         if vp and hasattr(self.b, "set_viewport") and not is_desktop(self.tabs[name]):
             self.b.set_viewport(self.tabs[name], vp["width"], vp["height"])
+        self.check_emulation(name)
 
     def bind_popup(self, name):
         """Point a `popup: true` tab at the browser tab the page opened (window.open / target=_blank)."""
@@ -287,6 +308,45 @@ class Runner:
         if isinstance(href, str) and href.startswith(("chrome-error:", "about:neterror")):
             raise RuntimeError(f"tab {name}: {url} did not load (is the server running?)")
 
+    def save_checkpoint(self, step_id):
+        """Browser state after a passed recorded step, so `record --from-step <next>` can resume without
+        re-running (and re-writing) the steps before it. Kept outside the evidence folder: it holds log-in cookies."""
+        if not hasattr(self.b, "state_save") or not hasattr(self.b, "tab_list"):
+            return
+        d = checkpoint_dir(self.out)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            d.chmod(0o700)  # log-in cookies: owner only (no-op on Windows)
+            live = {t["id"]: t["url"] for t in self.b.tab_list()}
+            urls = {
+                n: live[t]
+                for n, t in self.tabs.items()
+                if t in live and not self.sc["tabs"][n].get("popup") and not is_desktop(t)
+            }
+            self.b.state_save(d / f"{step_id}.json")
+            (d / f"{step_id}.urls.json").write_text(json.dumps(urls), encoding="utf-8")
+            for f in (d / f"{step_id}.json", d / f"{step_id}.urls.json"):
+                f.chmod(0o600)
+        except (DriverError, OSError) as e:
+            print(f"     checkpoint not saved ({e}); --from-step after {step_id} will need --session")
+
+    def check_emulation(self, name):
+        """Read the emulated settings back from the page once; a value the browser did not take fails the run."""
+        if not self.emulation or self.emulation_seen is not None:
+            return
+        tz, lang, dark, ua = self.b.evaluate(self.tabs[name], EMULATION_PROBE)
+        self.emulation_seen = {"timezone": tz, "locale": lang, "color_scheme": "dark" if dark else "light", "ua": ua}
+        want = self.emulation
+        bad = [
+            f"{k} {want[k]!r} (page reports {self.emulation_seen[k]!r})"
+            for k in ("timezone", "color_scheme")
+            if want.get(k) and self.emulation_seen[k] != want[k]
+        ]
+        if want.get("locale") and str(lang).lower() != want["locale"].lower():
+            bad.append(f"locale {want['locale']!r} (page reports {lang!r})")
+        if bad:
+            raise ScenarioError("emulation not applied: " + "; ".join(bad))
+
     # ---------- recording ----------
     def ensure_segment(self, tab):
         if self.sc["tabs"][tab].get("popup"):
@@ -299,7 +359,7 @@ class Runner:
         if not self.record:
             self.seg = {"tab": tab}
             return
-        idx = len(self.segments) + 1
+        idx = self.seg_offset + len(self.segments) + 1
         rid = self.b.video_start(self.tabs[tab])
         self.seg = {"tab": tab, "recording": rid, "t0": time.monotonic(), "file": f"seg-{idx:02d}-{tab}.mp4"}
         self.pause(1.0)
@@ -1311,6 +1371,11 @@ class Runner:
                 self.stopped = {"before": step["id"], "reason": f"writes data ({why})"}
                 print(f"[{step['id']}] not run: {self.stopped['reason']}; pass --allow-writes to run it in a dry-run")
                 break
+            if why and self.record and db_hooks(self.sc, "snapshot"):
+                name = snapshot_name(self.out, step["id"])
+                print(f"[{step['id']}] database snapshot {name} (before it writes)")
+                run_db_hook(self.sc, "snapshot", name)
+                self.snapshots[step["id"]] = name
             # Titles render leniently; actions/expectations render right before use so a value saved
             # earlier in the same step is available to the next action or check.
             step = {**step, **render({k: step[k] for k in ("title", "subtitle", "voice") if k in step}, self.vars)}
@@ -1474,6 +1539,10 @@ class Runner:
                 except DriverError:
                     pass
             rec["end"] = self.now()
+            if step["id"] in self.snapshots:
+                rec["snapshot"] = self.snapshots[step["id"]]
+            if self.record and rec["status"] == "passed":
+                self.save_checkpoint(step["id"])
             results.append(rec)
             print(f"[{step['id']}] {rec['status'].upper()}" + (f": {rec.get('error')}" if rec.get("error") else ""))
             for c in rec["checks"]:
@@ -1490,6 +1559,124 @@ class Runner:
         return results
 
 
+EMULATION_PROBE = (
+    "[Intl.DateTimeFormat().resolvedOptions().timeZone, navigator.language,"
+    " matchMedia('(prefers-color-scheme: dark)').matches, navigator.userAgent]"
+)
+
+
+def with_emulation(driver, emulation):
+    """Hand settings.device/locale/timezone/color_scheme to the driver; only agent-browser can emulate."""
+    if emulation:
+        if not hasattr(driver, "emulation"):
+            keys = ", ".join(f"settings.{k}" for k in emulation)
+            raise ScenarioError(f"{keys}: needs the agent-browser driver (this run uses {driver.name})")
+        driver.emulation = dict(emulation)
+    return driver
+
+
+def emulation_meta(emulation):
+    names = {"device": "device", "locale": "locale", "timezone": "time zone", "color_scheme": "color scheme"}
+    return {names[k]: str(v) for k, v in emulation.items()}
+
+
+def new_run_id():
+    """`{{run_id}}`: short, unique per run (month-day-time + 2 random bytes), safe in emails, codes and names."""
+    return time.strftime("%m%d%H%M%S") + secrets.token_hex(2)
+
+
+def checkpoint_dir(out_dir):
+    key = hashlib.sha1(str(Path(out_dir).resolve()).encode()).hexdigest()[:16]
+    return TIRAI_HOME / "checkpoints" / key
+
+
+def load_checkpoint(out_dir, step_id):
+    d = checkpoint_dir(out_dir)
+    state, urls = d / f"{step_id}.json", d / f"{step_id}.urls.json"
+    if not (state.is_file() and urls.is_file()):
+        return None
+    return {"state": state, "urls": json.loads(urls.read_text(encoding="utf-8"))}
+
+
+def db_hooks(sc, kind):
+    return {n: c[kind] for n, c in (sc.get("databases") or {}).items() if isinstance(c, dict) and c.get(kind)}
+
+
+def snapshot_name(out_dir, step_id):
+    key = hashlib.sha1(str(Path(out_dir).resolve()).encode()).hexdigest()[:8]
+    return f"tirai_{key}_" + "".join(c if c.isalnum() else "_" for c in str(step_id).lower())
+
+
+def run_db_hook(sc, kind, snapshot=""):
+    """Run `databases.<name>.reset|snapshot|restore` in the system shell; a failure stops the run.
+
+    The command reaches the shell as written, so `$VAR` / `${VAR}` are expanded by the shell from the environment
+    (secrets never appear in the command line); `{snapshot}` is replaced by the snapshot name.
+    """
+    for db, cmd in db_hooks(sc, kind).items():
+        p = subprocess.run(
+            str(cmd).replace("{snapshot}", snapshot), shell=True, capture_output=True, text=True, timeout=900
+        )
+        if p.returncode != 0:
+            tail = (p.stderr or p.stdout).strip().splitlines()[-3:]
+            raise ScenarioError(f"databases.{db}.{kind} failed (exit {p.returncode}): {' | '.join(tail)}")
+
+
+def splice_base(out_dir, from_step):
+    """The earlier recording a `--from-step` recording is spliced into: (its timeline, the steps kept)."""
+    f = Path(out_dir) / "timeline.json"
+    if not f.is_file():
+        raise ScenarioError(f"--from-step while recording adds to an earlier recording, but {f} does not exist")
+    old = json.loads(f.read_text(encoding="utf-8"))
+    if old.get("mode") != "record":
+        raise ScenarioError(f"--from-step while recording: {f} is not a recording")
+    idx = next((i for i, st in enumerate(old["steps"]) if _matches(st["id"], from_step)), None)
+    if idx is None:
+        last = old["steps"][-1]["id"] if old["steps"] else "before the first step"
+        raise ScenarioError(
+            f"--from-step {from_step}: the earlier recording stopped at {last}; re-record from a step it reached"
+        )
+    kept = old["steps"][:idx]
+    bad = [st["id"] for st in kept if st["status"] != "passed"]
+    if bad:
+        raise ScenarioError(f"--from-step {from_step}: earlier step {bad[0]} did not pass; re-record from {bad[0]}")
+    wrote = [st["id"] for st in kept if st.get("writes")]
+    if wrote:
+        print(
+            f"warning: kept step(s) {', '.join(wrote)} write data; if the run that prepared this session ran them "
+            "again (--allow-writes), that data now exists twice"
+        )
+    return old, kept
+
+
+def splice_vars(record_dir):
+    """Saved values for a spliced tail: the recording's, overlaid by the dry-run that prepared the session
+    (`--until`) when that dry-run is newer, since the tail runs on the page that dry-run left (new order ids)."""
+    record_dir = Path(record_dir)
+    sources = [d for d in (record_dir, record_dir.parent / "dry-run") if (d / "timeline.json").is_file()]
+    found = {}
+    for d in sorted(sources, key=lambda d: (d / "timeline.json").stat().st_mtime):
+        found.update(previous_vars(d))
+    return found
+
+
+def splice(out, old, kept, timeline, from_step):
+    """Kept steps of the earlier recording + the new ones. Segments only the replaced steps used move to
+    replaced/ (kept as a record of the attempt), and the title card says which step was re-recorded."""
+    used = {st["segment"] for st in kept if st.get("segment")}
+    for seg in old.get("segments", []):
+        if seg["file"] not in used and (out / seg["file"]).is_file():
+            (out / "replaced").mkdir(exist_ok=True)
+            shutil.move(str(out / seg["file"]), str(out / "replaced" / seg["file"]))
+    timeline["segments"] = [seg for seg in old.get("segments", []) if seg["file"] in used] + timeline["segments"]
+    timeline["steps"] = kept + timeline["steps"]
+    timeline["total_steps"] = old.get("total_steps", timeline["total_steps"])
+    timeline["spliced"] = [*old.get("spliced", []), {"from_step": from_step, "at": timeline["created"]}]
+    redone = ", ".join(x["from_step"] for x in timeline["spliced"])
+    timeline["meta"] = {**timeline.get("meta", {}), "re-recorded from": redone}
+    return timeline
+
+
 def previous_vars(out_dir):
     """Values saved by an earlier run into the same folder (for --from-step)."""
     f = Path(out_dir) / "timeline.json"
@@ -1501,6 +1688,8 @@ def previous_vars(out_dir):
         return {}
     found = dict(tl.get("resumed_vars") or {})
     found.update({k: v for st in tl.get("steps", []) for k, v in (st.get("saved") or {}).items()})
+    if tl.get("run_id"):
+        found["run_id"] = tl["run_id"]  # the data that run created carries its id
     return found
 
 
@@ -1526,6 +1715,39 @@ def run(
     out.mkdir(parents=True, exist_ok=True)
     settings = scenario.get("settings") or {}
     hold = hold if hold is not None else float(settings.get("hold", 2.5) if record else 0.0)
+    base = splice_base(out, from_step) if record and from_step else None
+    checkpoint = None
+    if base and base[1] and not session:
+        first = next(st for st in scenario["steps"] if _matches(st["id"], from_step))
+        if scenario["tabs"][first["tab"]].get("popup"):
+            raise ScenarioError(
+                f"--from-step {from_step}: it runs in a popup window, which a checkpoint does not hold; re-record from "
+                "the step on the main tab that opens the popup"
+            )
+        checkpoint = load_checkpoint(out, base[1][-1]["id"])
+        if not checkpoint:
+            raise ScenarioError(
+                f"--from-step {from_step}: no browser checkpoint after {base[1][-1]['id']} (recorded with bsk or an "
+                "older TIRAI); prepare a session with `tirai run --dry-run --until <step> --keep-session` and pass "
+                "--session"
+            )
+    if base:
+        later = base[0]["steps"][len(base[1]) :]
+        snap = next((st["snapshot"] for st in later if st.get("snapshot")), None)
+        if snap:
+            print(f"database restore {snap} (the data as it was before the replaced steps wrote)")
+            run_db_hook(scenario, "restore", snap)
+    if record and not from_step:
+        shutil.rmtree(checkpoint_dir(out), ignore_errors=True)  # a new recording; old checkpoints no longer match
+        if db_hooks(scenario, "reset"):
+            print("database reset (databases.*.reset) before recording")
+            run_db_hook(scenario, "reset")
+    if not from_step:
+        resume = None
+    elif base and not checkpoint:
+        resume = splice_vars(out)  # the tail runs on the page the preparing dry-run left
+    else:
+        resume = previous_vars(out)
     r = Runner(
         scenario,
         out,
@@ -1540,8 +1762,13 @@ def run(
         from_step=from_step,
         keep_session=keep_session,
         fresh=fresh,
-        resume_vars=previous_vars(out) if from_step else None,
+        resume_vars=resume,
     )
+    r.checkpoint = checkpoint
+    if base:
+        # Number new segments after every earlier one (also those an earlier splice moved to replaced/).
+        names = [f.name for f in [*out.glob("seg-*.mp4"), *out.glob("replaced/seg-*.mp4")]]
+        r.seg_offset = max([int(n.split("-")[1]) for n in names if n.split("-")[1].isdigit()], default=0)
     steps = r.run()
     timeline = {
         "scenario": scenario["name"],
@@ -1549,6 +1776,7 @@ def run(
         **({"lang": scenario["lang"]} if scenario.get("lang") else {}),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "driver": r.b.name,
+        "run_id": r.run_id,
         **({"privacy": _privacy_summary(r.privacy_config())} if scenario.get("privacy") else {}),
         "tabs": {k: {"label": v.get("label", k)} for k, v in scenario["tabs"].items()},
         "segments": r.segments,
@@ -1560,10 +1788,22 @@ def run(
         **({"downloads": r.downloads} if r.downloads else {}),
         **({"previews": r.previews} if r.previews else {}),
         **({"theme": r.theme} if r.theme else {}),
-        **({"meta": {str(k): str(v) for k, v in scenario["meta"].items()}} if scenario.get("meta") else {}),
+        **({"emulation": r.emulation} if r.emulation else {}),
+        **(
+            {
+                "meta": {
+                    **{str(k): str(v) for k, v in (scenario.get("meta") or {}).items()},
+                    **emulation_meta(r.emulation),
+                }
+            }
+            if scenario.get("meta") or r.emulation
+            else {}
+        ),
         **({"summary_card": False} if settings.get("summary_card") is False else {}),
         "hold": hold,
         **({"trim_still": True} if settings.get("trim_still") else {}),
     }
+    if base:
+        timeline = splice(out, *base, timeline, from_step)
     (out / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8")
     return timeline
