@@ -1160,7 +1160,7 @@ Start from `tirai init scenarios/<name>.yaml` and fill it in. Follow the **step-
    - `action_annotate: true` — draws a live callout pill + highlight box on **every** interactive action so the viewer knows exactly what is being clicked, cleared, typed, or submitted.
    - `show_expects: true` — renders a live **EXPECTATIONS** checklist HUD card in the corner (`✓` PASS / `✗` FAIL + actual value on failure) and highlights each checked DOM target in green/red as each `expect:` runs one by one.
    - `spotlight: true` — subtly dims the surrounding page during callouts and final annotations.
-2. **Write short, explicit `label:` on key actions and every `expect:`** (in the user's language, e.g. Vietnamese/Japanese/English) so the callout pills and per-expect checklist read like a real QA walkthrough rather than raw CSS selectors.
+2. **Write short, explicit `label:` on key actions and every `expect:`** in the user's language (e.g. Vietnamese/English) so the callout pills and per-expect checklist read like a real QA walkthrough rather than raw CSS selectors. **When recording with `--voice` (or producing a single-language video such as pure Vietnamese), write every `subtitle:` (and narration text) 100% in that target language — translate foreign/Japanese UI terms into natural target-language phrases instead of leaving raw kanji/foreign words inside `subtitle:`, so TTS reads every step smoothly.**
 3. **One step = one logical milestone** with explicit `expect:` checks AND final `annotate:` callouts on the resulting UI/DB/PDF/Excel state:
 
 ```yaml
