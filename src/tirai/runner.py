@@ -1292,7 +1292,7 @@ class Runner:
                 break
             # Titles render leniently; actions/expectations render right before use so a value saved
             # earlier in the same step is available to the next action or check.
-            step = {**step, **render({k: step[k] for k in ("title", "subtitle") if k in step}, self.vars)}
+            step = {**step, **render({k: step[k] for k in ("title", "subtitle", "voice") if k in step}, self.vars)}
             tab = step["tab"]
             self._step_id = step["id"]
             self.ensure_segment(tab)
@@ -1300,6 +1300,7 @@ class Runner:
                 "id": step["id"],
                 "title": step["title"],
                 "subtitle": step.get("subtitle", step["title"]),
+                **({"voice": step["voice"]} if step.get("voice") is not None else {}),
                 "tab": tab,
                 "segment": self.seg.get("file"),
                 "start": self.now(),

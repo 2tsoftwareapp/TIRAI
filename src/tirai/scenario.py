@@ -58,7 +58,7 @@ THEME_KEYS = {
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 DB_KEYS = {"database", "sql", "rows", "columns", "save", "label"}
 STEP_KEYS = {
-    "id", "tab", "title", "subtitle", "actions", "expect", "annotate", "hold", "zoom", "spotlight",
+    "id", "tab", "title", "subtitle", "voice", "actions", "expect", "annotate", "hold", "zoom", "spotlight",
     "layout", "split_with", "once", "case", "save", "writes", "for_each", "as",
     "action_annotate", "show_expects",
 }  # fmt: skip
@@ -574,6 +574,9 @@ def validate(sc) -> list[str]:
         sub = st.get("subtitle")
         if sub is not None and not isinstance(sub, str | dict) or isinstance(sub, dict) and not sub:
             errors.append(f"{where}: subtitle must be text or a non-empty map of language -> text")
+        voice = st.get("voice")
+        if voice is not None and not isinstance(voice, str | dict) or isinstance(voice, dict) and not voice:
+            errors.append(f"{where}: voice must be text or a non-empty map of language -> text")
         if st.get("tab") not in tabs:
             errors.append(f"{where}: tab must be one of {sorted(tabs)}")
         unknown = set(st) - STEP_KEYS

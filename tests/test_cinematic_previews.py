@@ -524,3 +524,34 @@ def test_agentbrowser_avoids_redundant_tab_resets(monkeypatch):
     assert ab.active == "t1"
     ab.press("t1", "Enter")
     assert ab.active is None
+
+
+def test_step_voice_field_validation_and_pick_voice():
+    """step.voice is validated like subtitle and preferred by compose.pick_voice over subtitle."""
+    from tirai.compose import pick_voice
+    from tirai.scenario import validate
+
+    sc = {
+        "name": "Voice test",
+        "tabs": {"app": {"url": "https://example.test"}},
+        "steps": [
+            {
+                "id": "S1",
+                "tab": "app",
+                "title": "Step 1",
+                "subtitle": {"vi": "AB03001 受注入力: 得意先=010001"},
+                "voice": {"vi": "Bước 1, mở màn hình nhập đơn hàng và chọn khách hàng."},
+                "actions": [{"wait": 10}],
+                "expect": [{"visible": "#ok"}],
+            }
+        ],
+    }
+    assert validate(sc) == []
+
+    bad = {**sc, "steps": [{**sc["steps"][0], "voice": {}}]}
+    assert any("voice must be text or a non-empty map" in e for e in validate(bad))
+
+    step_with_voice = sc["steps"][0]
+    assert pick_voice(step_with_voice, "vi") == "Bước 1, mở màn hình nhập đơn hàng và chọn khách hàng."
+    assert pick_voice({"title": "T", "subtitle": "On-screen note", "voice": "Spoken note"}, "en") == "Spoken note"
+    assert pick_voice({"title": "T", "subtitle": "Fallback note"}, "en") == "Fallback note"

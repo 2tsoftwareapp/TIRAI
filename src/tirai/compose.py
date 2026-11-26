@@ -736,6 +736,16 @@ def pick_subtitle(step, lang):
     return str(sub.get(lang) or next(iter(sub.values()), step["title"]))
 
 
+def pick_voice(step, lang):
+    """Spoken narration for `--voice`: prefers `voice:` over on-screen `subtitle:`."""
+    v = step.get("voice")
+    if v is None:
+        return pick_subtitle(step, lang)
+    if not isinstance(v, dict):
+        return str(v)
+    return str(v.get(lang) or next(iter(v.values()), pick_subtitle(step, lang)))
+
+
 def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voice=None, trim_still=False):
     """Build final.mp4 (+ subtitles.srt, report.md/html/xlsx, timeline.final.json, manifest.sha256)."""
     if not ffmpeg_bin():
@@ -773,7 +783,7 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
             clip = tmpd / f"{i:02d}-{step['id']}.mp4"
             dur = step_clip(tmp, rec_dir, tl, step, clip, lead, size, split_source(rec_dir, tl, i, step))
             if voice:
-                dur = fit_voice(tmpd, clip, dur, step, pick_subtitle(step, langs[0]), voice, langs[0])
+                dur = fit_voice(tmpd, clip, dur, step, pick_voice(step, langs[0]), voice, langs[0])
             clips.append(clip)
             for x, cues in srt.items():
                 cues.append(f"{len(cues) + 1}\n{ts(t + 0.2)} --> {ts(t + dur - 0.1)}\n{pick_subtitle(step, x)}\n")
