@@ -72,9 +72,15 @@ steps:
       - text_contains: { selector: "@error", text: "Email format is invalid.", label: "Validation error shown" }
       - attribute: { selector: "@email", name: "aria-invalid", equals: "true", label: "Email marked invalid" }
     annotate:                      # final result callouts (HUD stays visible alongside them)
-      - box: { target: "@email", label: "Invalid input" }
-      - arrow: { target: "@error", from: right, label: "Error message" }
+      - box: { target: "@email", label: "Invalid input", color: "#dc2626" }
+      - arrow: { target: "@error", from: right, label: "Error message", color: "#dc2626" }
 ```
+
+- **Semantic color standard (never use red for passing/normal callouts):**
+  - `#2563eb` (**Blue**, default `accent`): neutral focus, interactive actions, field pointers, document/sheet IDs.
+  - `#16a34a` (**Green**, `pass_color`): verified results, confirmed values, PASS checks (`color: "#16a34a"` on success callouts).
+  - `#d97706` (**Amber**): warnings, edge cases, notices (e.g., no-data warning, async queued notice).
+  - `#dc2626` (**Red**, `fail_color`): **ONLY** for validation errors, product defects, failed expectations, or `--record-failures` bug evidence — never set `theme.accent` to red.
 
 - Override per action when needed: `{ selector: "@x", label: "...", annotate: false, zoom: 1.8 }` (or `zoom: false` to skip zooming on a minor action).
 - Override per step when needed: `action_annotate: false` or `show_expects: false` on dense setup/login steps.

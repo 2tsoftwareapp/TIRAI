@@ -32,7 +32,7 @@
     anim: 'draw',
     duration: 420,
     ease: 'cubic-bezier(.22,.8,.24,1)',
-    color: '#e5252a',
+    color: '#2563eb',
     labelFont: "system-ui,'Segoe UI',sans-serif",
     cursorColor: '#111827',
     rippleColor: '#2563eb',
@@ -160,7 +160,7 @@
   };
   const pad = (r, p) => ({ x: r.left - p, y: r.top - p, w: r.width + 2 * p, h: r.height + 2 * p });
   const el = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
-  const defaults = (o = {}) => ({ color: CFG.color || '#e5252a', width: 3, padding: 6, ...o });
+  const defaults = (o = {}) => ({ color: CFG.color || '#2563eb', width: 3, padding: 6, ...o });
 
   function makeLabel(text, color) {
     const d = document.createElement('div');

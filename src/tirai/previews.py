@@ -203,7 +203,7 @@ def draw_annotations(
     """Draw Snagit-style annotations onto `image_path` -> `out_path`; return `(path, union_rect, (w, h))`."""
     Image, ImageDraw, _ = _need_pillow()
     theme = theme or {}
-    accent = theme.get("accent", "#e5252a")
+    accent = theme.get("accent", "#2563eb")
     font_pref = theme.get("font")
     spot_op = float(theme.get("spotlight_opacity", 0.30))
 

@@ -13,7 +13,7 @@ so it never changes how the page behaves. It is re-injected on every step; each 
 | `highlight` | `highlight: { target: ".row-2" }` | translucent marker fill (yellow) |
 | `blur` | `blur: { target: "#password" }` | masks sensitive content; always instant |
 
-Common options: `color` (`#e5252a`), `width` (3), `padding` (6), `label`, `labelPos`
+Common options: `color` (default `#2563eb` blue — semantic: `#2563eb` neutral/action, `#16a34a` PASS/verified, `#d97706` warning/edge, `#dc2626` error/FAIL only), `width` (3), `padding` (6), `label`, `labelPos`
 (right, left, top, bottom), `anim`, `duration`, `id`.
 
 ## Targets
