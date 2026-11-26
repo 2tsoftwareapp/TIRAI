@@ -86,6 +86,7 @@ def check_xlsx(path: Path, arg: dict) -> dict:
         names = wb.sheetnames
         cells = []
         for ws in wb.worksheets:
+            ws.reset_dimensions()
             for row in ws.iter_rows(values_only=True):
                 cells.extend(str(c) for c in row if c is not None)
         wb.close()
