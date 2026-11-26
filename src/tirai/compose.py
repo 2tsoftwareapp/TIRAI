@@ -30,7 +30,7 @@ THEME_DEFAULTS = {
     "tab_colors": ["#1f6feb", "#7c3aed", "#0e7490", "#b45309"],
     "pass_color": "#16a34a",
     "fail_color": "#dc2626",
-    "accent": "#e5252a",
+    "accent": "#2563eb",
     "spotlight_opacity": 0.30,
 }
 
