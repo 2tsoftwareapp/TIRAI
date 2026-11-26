@@ -71,13 +71,13 @@ Key facts for agents:
 
 ```text
 usage: tirai [-h] [--version]
-             {doctor,setup,init,validate,run,inspect,compose,record,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
+             {doctor,setup,init,validate,run,inspect,compose,record,suite,diff,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
              ...
 
 Scenario-driven test evidence recorder
 
 positional arguments:
-  {doctor,setup,init,validate,run,inspect,compose,record,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
+  {doctor,setup,init,validate,run,inspect,compose,record,suite,diff,install-skill,export,scan-pii,index,sign,verify,from-trace,from-spec,capture,dbx,dbx-connect,mcp,annotate-js}
     doctor              check ffmpeg, BrowserSkill, fonts and optional drivers
     setup               install what is missing (ffmpeg, agent-browser, DBX, skills); reuses tools
                         already here
@@ -87,6 +87,9 @@ positional arguments:
     inspect             list each step's page elements with locators + a suggested targets: block
     compose             build final.mp4 + subtitles + report from a recorded timeline
     record              dry-run, record, then compose in one go
+    suite               run many scenarios (files or folders), then one summary, junit.xml and
+                        index
+    diff                compare the per-step screenshots of two runs (visual regression)
     install-skill       install the tirai-evidence skill for an agent
     export              write junit.xml, xray.json, testrail.csv from an evidence folder (no
                         upload)
@@ -169,7 +172,8 @@ options:
   --keep-session        leave the browser session open afterwards (for --from-step)
   --allow-writes        dry-run: also run steps that write data (writes:, write SQL)
   --until STEP          dry-run: stop after this step
-  --from-step STEP      dry-run: start at this step in --session's open page
+  --from-step STEP      start at this step in --session's open page; when recording, replace this
+                        step and the ones after it in the earlier recording in --out
   --dry-run
   --record
 
@@ -233,7 +237,8 @@ options:
   --keep-session        leave the browser session open afterwards (for --from-step)
   --allow-writes        dry-run: also run steps that write data (writes:, write SQL)
   --until STEP          dry-run: stop after this step
-  --from-step STEP      dry-run: start at this step in --session's open page
+  --from-step STEP      start at this step in --session's open page; when recording, replace this
+                        step and the ones after it in the earlier recording in --out
   --output OUTPUT       final video path (default: <timeline dir>/final.mp4)
   --lead LEAD           seconds kept before each step starts
   --title-seconds TITLE_SECONDS
@@ -245,6 +250,37 @@ options:
                         for 2 s or more
   --skip-dry-run
   --record-failures     record and compose even when a step fails (bug evidence)
+
+usage: tirai suite [-h] [--out OUT] [--parallel PARALLEL] [--dry-run]
+                   [--driver {agent-browser,bsk}] [--headed] [--fresh] [--record-failures]
+                   paths [paths ...]
+
+positional arguments:
+  paths                 scenario files or folders searched for scenarios
+
+options:
+  -h, --help            show this help message and exit
+  --out OUT             output root, one folder per scenario (default: evidence/suite)
+  --parallel PARALLEL, -j PARALLEL
+                        scenarios run at once (agent-browser only)
+  --dry-run             dry-run each scenario instead of recording it
+  --driver {agent-browser,bsk}
+                        browser driver (default: agent-browser)
+  --headed              show the agent-browser windows
+  --fresh               clear cookies and storage before each scenario's tab setup
+  --record-failures     record and compose scenarios that fail too
+
+usage: tirai diff [-h] [--out OUT] [--threshold THRESHOLD] old new
+
+positional arguments:
+  old                   earlier evidence folder (or its record/ folder)
+  new                   later evidence folder
+
+options:
+  -h, --help            show this help message and exit
+  --out OUT             report folder (default: evidence/diff)
+  --threshold THRESHOLD
+                        % of pixels a step may change and still count as same
 
 usage: tirai install-skill [-h] --agent {claude,codex,antigravity,cursor,devin,agents,all}
                            [--project PROJECT] [--dest DEST] [--force]
@@ -494,6 +530,18 @@ tirai validate scenarios/my-feature.yaml
 
 Write steps as *action + expect*, see [scenario format](scenario-format.md) and [annotations](annotations.md).
 
+## 4. Many scenarios, CI and re-runs
+
+```bash
+tirai suite scenarios/ -j 2                  # every scenario, one summary + junit.xml + index.html
+tirai diff evidence/old evidence/new         # what changed on screen between two runs
+tirai record scenarios/order.yaml --from-step S7   # re-record only the end of a failed recording
+```
+
+In GitHub Actions, use this repository as an action (`uses: 2tsoftwareapp/TIRAI@main`, see the README). Steps
+that create data: use `{{run_id}}`, `cleanup:` or database `reset`/`snapshot`/`restore` hooks
+([details](scenario-format.md#making-steps-that-write-data-safe-to-run-again)).
+
 ---
 
 ## Source: docs/scenario-format.md
@@ -688,6 +736,70 @@ tirai run flow.yaml --dry-run --session tirai-1234 --from-step S14
 saved by the previous run in the same `--out` folder. `--fresh` clears cookies and storage before tab setup, so
 the run starts logged out instead of reusing an old session (bsk cannot clear HttpOnly cookies).
 
+### Re-recording the end of a recording
+
+When a long recording fails near the end (a flaky step, or a fix to the scenario), record only the tail and
+splice it into the earlier recording instead of recording everything again:
+
+```bash
+tirai record flow.yaml --from-step S14        # agent-browser: resumes from the checkpoint after S13
+```
+
+While recording on agent-browser, TIRAI saves a browser checkpoint after every passed step: cookies, local and
+session storage of every origin, and the URL of each tab. It lives in `~/.tirai/checkpoints/` (it holds log-in
+cookies, so never in the evidence folder; set `AGENT_BROWSER_ENCRYPTION_KEY` to encrypt it) and is cleared by the
+next full recording. `tirai record --from-step S14` skips the dry-run, opens a fresh browser with the checkpoint
+after S13 (no tab `setup:`, no re-login), records S14 and every later step, and replaces them in `<out>/record/`.
+S1..S13 do not run again, so nothing they wrote is written twice.
+
+- The kept steps must have passed. Segments only the replaced steps used move to `record/replaced/`,
+  `timeline.json` lists the splice under `spliced`, and the title card shows `re-recorded from: S14`.
+- `{{run_id}}` and the values saved by `save:` are those of the original recording.
+- Page state that lives only in memory (a half-filled wizard) is not in a checkpoint: re-record from the step
+  that starts that screen.
+- Popup windows (`popup: true` tabs) are not in a checkpoint: re-record from the step on the main tab that opens
+  the popup.
+- Checkpoint files hold log-in cookies in plain JSON (readable only by you) unless `AGENT_BROWSER_ENCRYPTION_KEY`
+  is set; they stay until the next full recording into the same `--out`, or until you delete
+  `~/.tirai/checkpoints/`.
+- When a replaced step wrote data, the attempt that failed may have written it already. With
+  `databases.<name>.snapshot`/`restore` (below) TIRAI restores the snapshot taken before the first replaced
+  step that writes, so the data is back to where it was.
+- bsk (or a recording without checkpoints): prepare a session yourself and pass it:
+  `tirai run flow.yaml --dry-run --until S13 --keep-session --session fix`, then
+  `tirai record flow.yaml --from-step S14 --session fix`. That dry-run runs S1..S13 again (it stops before a
+  `writes:` step unless `--allow-writes`, which writes that data a second time); saved values then come from it.
+
+### Making steps that write data safe to run again
+
+A database transaction cannot undo what the app wrote: the app commits each request on its own connections
+before the page shows the result, and TIRAI's database connection is a separate, read-only one. Pick what fits:
+
+| Case | Use |
+|---|---|
+| Values that must be unique (email, order no., name) | `{{run_id}}` in them: `value: "order-{{run_id}}"`. Unique per run (`1126143917` + 4 hex), reused by `--from-step` |
+| A test database you can reset | `databases.<name>.reset`: runs before every full recording |
+| Long flow that writes, may need `--from-step` | `databases.<name>.snapshot` + `restore`: snapshot before each `writes:` step while recording; restore on `--from-step` |
+| Shared database, no admin access | `cleanup:` steps that delete what the run created (use the ids from `save:`) |
+| Data you cannot delete or duplicate | Record once (`tirai record` dry-runs only up to the first write step); re-record from the first write step at the earliest |
+
+```yaml
+databases:
+  default:
+    dsn: "${EV_DB_DSN}"            # read-only user: checks and DBX
+    # The hooks need the database owner, not the read-only user, and PostgreSQL tools of the server's version
+    # (a newer pg_dump writes settings an older server rejects), so run them inside the database container:
+    reset: 'docker compose exec -T db psql -U demo -d shop -f /fixtures/reset.sql'
+    snapshot: 'docker compose exec -T db pg_dump -U demo -Fc -f "/tmp/{snapshot}.dump" shop'
+    restore: 'docker compose exec -T db pg_restore -U demo --clean --if-exists -d shop "/tmp/{snapshot}.dump"'
+    # SQLite: snapshot: 'cp "$DB_FILE" "/tmp/{snapshot}.db"'  restore: 'cp "/tmp/{snapshot}.db" "$DB_FILE"'
+```
+
+`pg_restore --clean` works while the app keeps its connections open. The commands run in the system shell (`sh`; `cmd` on Windows) with the scenario's environment: write secrets as
+`$VAR` so the shell expands them and they never appear on the command line. `{snapshot}` is a name per output
+folder and step (`tirai_<8 hex>_<step>`). A command that fails stops the run. `tirai validate` hints at write
+steps that have none of `cleanup:`, a reset/snapshot hook or `{{run_id}}`.
+
 ## Popup windows
 
 ```yaml
@@ -704,6 +816,24 @@ closes and a new one opens, the next step binds again.
 
 `settings.viewport: { width: 1600, height: 900 }` sets the page size on agent-browser (each tab and popup).
 bsk uses the size of your browser window.
+
+## Device, language, time zone and color scheme
+
+```yaml
+settings:
+  device: "iPhone 14"        # agent-browser device name: user agent and screen size
+  locale: ja-JP              # navigator.language and Accept-Language
+  timezone: Asia/Tokyo       # IANA name; dates and Intl in the page use it
+  color_scheme: dark         # prefers-color-scheme: dark | light
+```
+
+agent-browser only (a `bsk` run fails with a clear error). TIRAI reads the time zone, language and color scheme
+back from the first page and fails the run when the browser did not take one, so the evidence never claims a
+setting that was not in effect. The values are printed on the title card. `device` keeps the phone's size and
+user agent at pixel ratio 1 (agent-browser misplaces clicks on high-DPI emulation while recording); a portrait
+recording is centred in a 16:9 frame so the header bar and subtitles keep their layout. Touch events are not
+emulated. The settings apply to every tab of the session, so `device` cannot be combined with a `kind: dbx` tab
+(the grid would be phone-sized) or with `viewport`.
 
 ## Recording model
 
@@ -964,7 +1094,8 @@ Nothing is tied to one OS or install location. Every external tool, font and tim
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TIRAI_HOME` | `~/.tirai` | where setup puts ffmpeg, agent-browser (`bin/`) and DBX web (`dbx/`) |
+| `TIRAI_HOME` | `~/.tirai` | where setup puts ffmpeg, agent-browser (`bin/`) and DBX web (`dbx/`); browser checkpoints for `record --from-step` go to `checkpoints/` |
+| `AGENT_BROWSER_ENCRYPTION_KEY` | unset | 64 hex chars: agent-browser encrypts the checkpoints (they hold log-in cookies) |
 | `TIRAI_DRIVER` | `agent-browser` if installed, else `bsk` | browser driver (scenario `driver:` and `--driver` win) |
 | `TIRAI_HEADED` | off | show the agent-browser window (same as `--headed`) |
 | `TIRAI_CURSOR` | `1` | draw agent-browser's animated cursor in recordings |
@@ -1005,7 +1136,25 @@ settings:
   camera: follow       # zoom + pan to each action target (or per step: zoom: follow)
   camera_factor: 1.6
   fast_forward: 4      # speed of long waits in the video; 0 = real time
+  device: "iPhone 14"  # agent-browser emulation: device, locale, timezone, color_scheme (every tab)
+  locale: ja-JP
+  timezone: Asia/Tokyo
+  color_scheme: dark
 ```
+
+## Database hooks
+
+```yaml
+databases:
+  default:
+    dsn: "${EV_DB_DSN}"   # read-only: expect: db and DBX
+    reset: '...'          # before every full recording
+    snapshot: '... {snapshot}'   # before each writes: step while recording
+    restore: '... {snapshot}'    # on record --from-step
+```
+
+Shell commands run with the scenario's environment (`$VAR` for secrets). They need the database owner, not the
+read-only `dsn` user. See [Steps that write data](scenario-format.md#making-steps-that-write-data-safe-to-run-again).
 
 ## DBX tab overrides
 
@@ -1105,6 +1254,10 @@ tirai run --record ──► driver recording per contiguous tab block ──►
       ▼
 tirai compose ──► ffmpeg: cut steps, header bar, title card, concat, burn subtitles
       └──► final.mp4, subtitles.srt, report.md/.html/.xlsx, timeline.final.json, manifest.sha256
+
+tirai suite ──► one `tirai record` process per scenario (parallel with agent-browser) ──► suite.md, junit.xml, index.html
+tirai diff  ──► step-*.png of two runs ──► diff.html, diff.json
+record --from-step ──► browser checkpoint (~/.tirai/checkpoints) + database restore hook ──► tail spliced into timeline.json
 ```
 
 | Component | Owner | Why |
@@ -1119,7 +1272,11 @@ Design rules:
 - **Dry-run before record**: recording only happens for a scenario that already passes, so videos have no failed attempts.
 - **Per-tab segments**: both drivers record a single tab, so the runner starts a new segment on every tab switch and composition restores scenario order.
 - **Checks are independent of pixels**: DOM checks read the page; DB checks query read-only, because DBX renders result cells on a canvas.
-- **Fail closed**: a missing selector, annotation target or env var fails the step.
+- **Fail closed**: a missing selector, annotation target or env var fails the step; so do an emulation setting the
+  page does not report back and a database hook that exits non-zero.
+- **No transactions around app writes**: the app commits on its own connections, so re-runs are made safe with
+  `{{run_id}}`, `cleanup:`, database snapshot/restore hooks, and checkpoints that resume a recording without
+  running the earlier steps again.
 
 The previous spec-to-test platform (TypeScript workspaces) is preserved on branch `archive/tirai-v1`.
 
@@ -1147,6 +1304,13 @@ The previous spec-to-test platform (TypeScript workspaces) is preserved on branc
 | `setup` skips a step with "sudo needs a password" | no terminal for the sudo prompt (agent shell); run the printed command yourself, or rerun `tirai setup` in a terminal |
 | DBX query does not run on macOS | the run shortcut defaults to `Meta+Enter`; override with `tabs.<db>.dbx.run_key` |
 | Steps flaky on a slow machine | `TIRAI_TIMING_SCALE=2` |
+| A long recording failed near the end | `tirai record <file> --from-step <step>` re-records the tail from the browser checkpoint and splices it in |
+| `--from-step S7: no browser checkpoint after S6` | recorded with bsk or an older TIRAI: `tirai run <file> --dry-run --until S6 --keep-session --session fix`, then add `--session fix` |
+| `emulation not applied: timezone ...` | the browser did not take `settings.timezone`/`locale`; use agent-browser (bsk cannot emulate) and check the value is an IANA name / BCP 47 tag |
+| Clicks miss with `settings.device` | TIRAI renders device emulation at pixel ratio 1 for this; set no `viewport` next to `device` |
+| `databases.default.restore failed ... transaction_timeout` | `pg_dump` newer than the server; run `pg_dump`/`pg_restore` inside the database container |
+| `--parallel: ... reset/snapshot/restore a database` | scenarios with database hooks share data; run `tirai suite` without `--parallel` |
+| `tirai diff` reports small changes on every step | dynamic content (clock, ids) changes pixels; raise `--threshold` or mask it with `privacy.selectors` |
 | Subtitles missing Vietnamese glyphs | set `TIRAI_FONT` (and `TIRAI_FONT_BOLD`) to a Unicode .ttf |
 | `missing environment variable X` | export it; `tirai validate` lists every variable the scenario needs |
 | Video is choppy | BrowserSkill records ~12 fps; keep `anim: draw`/`fade` short or use `anim: none` |
@@ -1301,7 +1465,31 @@ Optional extras: `tirai compose evidence/record/timeline.json --voice` (spoken s
 `tirai scan-pii evidence/record --fix` (OCR pass for PII drawn on canvas), `tirai sign evidence/record --key
 ~/.ssh/id_ed25519 [--tsa]` then `tirai verify evidence/record --pubkey ~/.ssh/id_ed25519.pub`,
 `tirai export evidence/record --format junit xray testrail` (import files only, nothing is uploaded),
-`tirai index evidence/ -o evidence/index.html` (one page for many runs).
+`tirai index evidence/ -o evidence/index.html` (one page for many runs),
+`tirai suite scenarios/ -j 2` (many scenarios, one summary + `junit.xml`),
+`tirai diff <old run> <new run>` (per-step screenshot comparison).
+A recording that failed near the end: `tirai record <file> --from-step S14` records only S14.. from the browser
+checkpoint saved after S13 and splices it in (bsk: prepare with `tirai run <file> --dry-run --until S13
+--keep-session --session fix`, then add `--session fix`).
+
+### Steps that write data: pick the case
+
+Never wrap app writes in a transaction: the app commits on its own connections. Decide per scenario, then say
+which case you applied:
+
+| You see | Apply |
+|---|---|
+| The step creates something with a unique field (email, code, name) | `{{run_id}}` in that value |
+| The project has a seed/reset script or a disposable test DB | `databases.<name>.reset` |
+| Long flow with `writes:` steps, likely to need `--from-step` | `databases.<name>.snapshot` + `restore` (`{snapshot}` in both) |
+| Shared DB, no admin rights, ids are on screen | `save:` the id, `cleanup:` deletes it |
+| Data that cannot be deleted or duplicated (payments, mails to real people) | ask the user before recording; record once; `--from-step` only from the first write step |
+| Several scenarios share one database and use hooks | run them one at a time (`tirai suite` refuses `--parallel` then): a reset/restore would wipe the other run's data |
+
+`tirai validate` prints a `hint:` for write steps with none of these. Commands run in the shell: secrets as
+`$VAR`, never literal. Hooks need the DB owner (the `dsn` user stays read-only); for PostgreSQL run
+`pg_dump`/`pg_restore` inside the DB container so their version matches the server. A failed recording that wrote data: `--from-step <first failed step>` restores the snapshot
+taken before it (with the hooks) and resumes from the checkpoint, so nothing is written twice.
 
 To start from a written spec: `tirai from-spec login.feature --url <app url>` drafts the YAML (Gherkin, Markdown
 or CSV tables); review every `TODO(...)` selector and the "not converted" lines with the user before recording.

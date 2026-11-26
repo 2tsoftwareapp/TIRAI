@@ -1,0 +1,94 @@
+name: TIRAI evidence
+description: Record test-evidence videos from TIRAI scenarios (headless agent-browser) and upload them as an artifact.
+branding:
+  icon: video
+  color: blue
+
+inputs:
+  scenarios:
+    description: Scenario files or folders (space separated), passed to `tirai suite`.
+    required: true
+  out:
+    description: Output folder.
+    default: evidence/suite
+  args:
+    description: Extra `tirai suite` arguments, e.g. `--parallel 2` or `--dry-run`.
+    default: ""
+  extras:
+    description: pip extras to install with TIRAI, e.g. `postgres,pdf`.
+    default: ""
+  python-version:
+    description: Python used to run TIRAI.
+    default: "3.12"
+  artifact-name:
+    description: Name of the uploaded artifact (empty to skip the upload).
+    default: tirai-evidence
+  fail-on-error:
+    description: Fail the job when a scenario fails (the evidence is uploaded first).
+    default: "true"
+
+outputs:
+  exit-code:
+    description: Exit code of `tirai suite` (0 when every scenario passed).
+    value: ${{ steps.suite.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install TIRAI
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        EXTRAS: ${{ inputs.extras }}
+      run: python -m pip install --quiet "${ACTION_PATH}${EXTRAS:+[$EXTRAS]}"
+
+    - name: Install ffmpeg and fonts (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-dejavu-core fonts-noto-cjk
+
+    - name: Install agent-browser (and ffmpeg outside Linux)
+      shell: bash
+      env:
+        RUNNER_OS_NAME: ${{ runner.os }}
+      run: |
+        if [ "$RUNNER_OS_NAME" = "Linux" ]; then only="agent-browser"; else only="ffmpeg agent-browser"; fi
+        tirai setup --yes --only $only
+        tirai doctor || true
+
+    - name: Run scenarios
+      id: suite
+      shell: bash
+      env:
+        SCENARIOS: ${{ inputs.scenarios }}
+        OUT: ${{ inputs.out }}
+        ARGS: ${{ inputs.args }}
+      run: |
+        set +e
+        # Word splitting on purpose: both inputs are space-separated lists.
+        tirai suite $SCENARIOS --out "$OUT" $ARGS
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        [ -f "$OUT/suite.md" ] && cat "$OUT/suite.md" >> "$GITHUB_STEP_SUMMARY"
+        exit 0
+
+    - name: Upload evidence
+      if: inputs.artifact-name != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.out }}
+        if-no-files-found: warn
+
+    - name: Fail on scenario failure
+      if: inputs.fail-on-error == 'true' && steps.suite.outputs.exit-code != '0'
+      shell: bash
+      env:
+        CODE: ${{ steps.suite.outputs.exit-code }}
+      run: |
+        echo "tirai suite exited with $CODE; see the job summary and the uploaded evidence"
+        exit 1

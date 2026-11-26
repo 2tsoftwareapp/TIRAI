@@ -207,7 +207,7 @@ def test_from_step_reuses_open_tab_and_saved_values(fake, tmp_path):
     assert ("fill", "t1", "#q", "ORD-7") in d.calls
     assert not any(c[0] in ("tab_create", "open_session") for c in d.calls)
     assert ("click", "t1", "#login") not in d.calls  # setup already happened in the kept session
-    assert runner.previous_vars(tmp_path) == {"order": "ORD-7"}
+    assert {k: v for k, v in runner.previous_vars(tmp_path).items() if k != "run_id"} == {"order": "ORD-7"}
 
 
 def test_db_save_unknown_column_is_an_error(fake, tmp_path, monkeypatch):

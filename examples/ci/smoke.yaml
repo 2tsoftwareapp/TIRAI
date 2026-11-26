@@ -1,0 +1,22 @@
+# End-to-end check used by TIRAI's own CI (and a starting point for the GitHub Action).
+# Serve the page first: python -m http.server 8765 --directory examples/ci/site
+name: "CI smoke: greeting form"
+meta: { purpose: "TIRAI end-to-end check" }
+tabs:
+  app: { url: "http://127.0.0.1:8765/", label: "SMOKE APP" }
+steps:
+  - id: S1
+    tab: app
+    title: Open the greeting form
+    expect:
+      - visible: "#name"
+  - id: S2
+    tab: app
+    title: Enter a name and greet
+    actions:
+      - fill: { selector: "#name", value: "Tirai" }
+      - click: "#greet"
+    expect:
+      - text_contains: { selector: "#msg", text: "Hello, Tirai!" }
+    annotate:
+      - box: { target: "#msg", label: "Greeting shown", style: success }

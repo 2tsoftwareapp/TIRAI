@@ -144,7 +144,31 @@ Optional extras: `tirai compose evidence/record/timeline.json --voice` (spoken s
 `tirai scan-pii evidence/record --fix` (OCR pass for PII drawn on canvas), `tirai sign evidence/record --key
 ~/.ssh/id_ed25519 [--tsa]` then `tirai verify evidence/record --pubkey ~/.ssh/id_ed25519.pub`,
 `tirai export evidence/record --format junit xray testrail` (import files only, nothing is uploaded),
-`tirai index evidence/ -o evidence/index.html` (one page for many runs).
+`tirai index evidence/ -o evidence/index.html` (one page for many runs),
+`tirai suite scenarios/ -j 2` (many scenarios, one summary + `junit.xml`),
+`tirai diff <old run> <new run>` (per-step screenshot comparison).
+A recording that failed near the end: `tirai record <file> --from-step S14` records only S14.. from the browser
+checkpoint saved after S13 and splices it in (bsk: prepare with `tirai run <file> --dry-run --until S13
+--keep-session --session fix`, then add `--session fix`).
+
+### Steps that write data: pick the case
+
+Never wrap app writes in a transaction: the app commits on its own connections. Decide per scenario, then say
+which case you applied:
+
+| You see | Apply |
+|---|---|
+| The step creates something with a unique field (email, code, name) | `{{run_id}}` in that value |
+| The project has a seed/reset script or a disposable test DB | `databases.<name>.reset` |
+| Long flow with `writes:` steps, likely to need `--from-step` | `databases.<name>.snapshot` + `restore` (`{snapshot}` in both) |
+| Shared DB, no admin rights, ids are on screen | `save:` the id, `cleanup:` deletes it |
+| Data that cannot be deleted or duplicated (payments, mails to real people) | ask the user before recording; record once; `--from-step` only from the first write step |
+| Several scenarios share one database and use hooks | run them one at a time (`tirai suite` refuses `--parallel` then): a reset/restore would wipe the other run's data |
+
+`tirai validate` prints a `hint:` for write steps with none of these. Commands run in the shell: secrets as
+`$VAR`, never literal. Hooks need the DB owner (the `dsn` user stays read-only); for PostgreSQL run
+`pg_dump`/`pg_restore` inside the DB container so their version matches the server. A failed recording that wrote data: `--from-step <first failed step>` restores the snapshot
+taken before it (with the hooks) and resumes from the checkpoint, so nothing is written twice.
 
 To start from a written spec: `tirai from-spec login.feature --url <app url>` drafts the YAML (Gherkin, Markdown
 or CSV tables); review every `TODO(...)` selector and the "not converted" lines with the user before recording.

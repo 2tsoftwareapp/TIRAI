@@ -18,6 +18,13 @@
 | `setup` skips a step with "sudo needs a password" | no terminal for the sudo prompt (agent shell); run the printed command yourself, or rerun `tirai setup` in a terminal |
 | DBX query does not run on macOS | the run shortcut defaults to `Meta+Enter`; override with `tabs.<db>.dbx.run_key` |
 | Steps flaky on a slow machine | `TIRAI_TIMING_SCALE=2` |
+| A long recording failed near the end | `tirai record <file> --from-step <step>` re-records the tail from the browser checkpoint and splices it in |
+| `--from-step S7: no browser checkpoint after S6` | recorded with bsk or an older TIRAI: `tirai run <file> --dry-run --until S6 --keep-session --session fix`, then add `--session fix` |
+| `emulation not applied: timezone ...` | the browser did not take `settings.timezone`/`locale`; use agent-browser (bsk cannot emulate) and check the value is an IANA name / BCP 47 tag |
+| Clicks miss with `settings.device` | TIRAI renders device emulation at pixel ratio 1 for this; set no `viewport` next to `device` |
+| `databases.default.restore failed ... transaction_timeout` | `pg_dump` newer than the server; run `pg_dump`/`pg_restore` inside the database container |
+| `--parallel: ... reset/snapshot/restore a database` | scenarios with database hooks share data; run `tirai suite` without `--parallel` |
+| `tirai diff` reports small changes on every step | dynamic content (clock, ids) changes pixels; raise `--threshold` or mask it with `privacy.selectors` |
 | Subtitles missing Vietnamese glyphs | set `TIRAI_FONT` (and `TIRAI_FONT_BOLD`) to a Unicode .ttf |
 | `missing environment variable X` | export it; `tirai validate` lists every variable the scenario needs |
 | Video is choppy | BrowserSkill records ~12 fps; keep `anim: draw`/`fade` short or use `anim: none` |

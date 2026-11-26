@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TIRAI smoke</title>
+<style>
+  body { font: 18px system-ui, sans-serif; margin: 48px; background: #f8fafc; color: #0f172a; }
+  form { display: flex; gap: 12px; }
+  input, button { font: inherit; padding: 8px 12px; }
+  #msg { margin-top: 24px; font-weight: 600; min-height: 1.5em; }
+</style>
+</head>
+<body>
+<h1>Greeting form</h1>
+<form id="f">
+  <label for="name">Name</label>
+  <input id="name" autocomplete="off">
+  <button id="greet" type="submit">Greet</button>
+</form>
+<p id="msg"></p>
+<p>Local time: <span id="clock"></span> · language: <span id="lang"></span></p>
+<script>
+  document.getElementById('f').addEventListener('submit', (e) => {
+    e.preventDefault();
+    document.getElementById('msg').textContent = 'Hello, ' + document.getElementById('name').value + '!';
+  });
+  document.getElementById('clock').textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  document.getElementById('lang').textContent = navigator.language;
+</script>
+</body>
+</html>

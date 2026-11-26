@@ -53,18 +53,28 @@ class AgentBrowser:
         self.expect_popups = True  # runner sets False when scenario has no popup tabs to avoid extra tab switches
         self.init_scripts = []  # JS sources registered before any page script when the session launches
         self._init_dir = None
+        self.emulation = {}  # settings.device/locale/timezone/color_scheme, applied when the session launches
+
+    def _env(self):
+        env = tool_env()
+        if self.emulation.get("timezone"):
+            env["TZ"] = self.emulation["timezone"]  # Chrome takes its time zone from the process it starts in
+        return env
 
     def run(self, *args, timeout=90, stdin=None, launch=False):
         cmd = [_bin(), "--session", self.session, "--json"]
         if launch and self.headed:
             cmd.append("--headed")
+        if launch and self.emulation.get("locale"):
+            loc = self.emulation["locale"]
+            cmd += ["--args", f"--lang={loc},--accept-lang={loc}"]
         if launch and self.init_scripts:
             self._init_dir = self._init_dir or tempfile.mkdtemp(prefix="tirai-init-")
             for i, src in enumerate(self.init_scripts):
                 f = Path(self._init_dir) / f"init-{i}.js"
                 f.write_text(src, encoding="utf-8")
                 cmd += ["--init-script", str(f)]
-        p = run_text([*cmd, *args], timeout=timeout, input=stdin, env=tool_env())
+        p = run_text([*cmd, *args], timeout=timeout, input=stdin, env=self._env())
         out = p.stdout.strip()
         try:
             data = json.loads(out.splitlines()[-1]) if out else {}
@@ -78,15 +88,25 @@ class AgentBrowser:
     def open_session(self, url, scope):
         """Fresh session (own daemon + browser) named after `scope`; returns the first tab id."""
         self.session = re.sub(r"[^\w-]", "-", f"{scope}-{os.getpid()}")
-        run_text([_bin(), "--session", self.session, "close"], timeout=60, env=tool_env())
+        run_text([_bin(), "--session", self.session, "close"], timeout=60, env=self._env())
         self.run("open", url, launch=True, timeout=180)
+        if self.emulation.get("device"):
+            dev = self.run("set", "device", self.emulation["device"])
+            if dev.get("width") and dev.get("height"):
+                # Keep the device's size and user agent but render at pixel ratio 1: while recording,
+                # agent-browser (0.43) divides click coordinates by the ratio, so clicks miss on a 3x phone.
+                self.run("set", "viewport", str(dev["width"]), str(dev["height"]), "1")
+        if self.emulation.get("color_scheme"):
+            self.run("set", "media", self.emulation["color_scheme"])
+        if self.emulation.get("device") or self.emulation.get("color_scheme"):
+            self.run("reload", timeout=120)  # the first page loaded before the overrides
         tabs = self.run("tab", "list").get("tabs", [])
         self.active = next((t["tabId"] for t in tabs if t.get("active")), "t1")
         return self.active
 
     def close_session(self):
         if self.session:
-            run_text([_bin(), "--session", self.session, "close"], timeout=60, env=tool_env())
+            run_text([_bin(), "--session", self.session, "close"], timeout=60, env=self._env())
         if self._init_dir:
             shutil.rmtree(self._init_dir, ignore_errors=True)
             self._init_dir = None
@@ -183,6 +203,13 @@ class AgentBrowser:
             self.run("cookies", "clear")
         self.run("storage", "local", "clear")
         self.run("storage", "session", "clear")
+
+    def state_save(self, path):
+        """Cookies + local/session storage of every origin in the session (no tab switch: safe while recording)."""
+        return self.run("state", "save", str(Path(path).resolve()))
+
+    def state_load(self, path):
+        return self.run("state", "load", str(Path(path).resolve()))
 
     def tab_create(self, url):
         self.active = self.run("tab", "new", url, timeout=120)["tabId"]

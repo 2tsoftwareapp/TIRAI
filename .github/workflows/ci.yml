@@ -31,7 +31,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,diff]"
       - name: Lint
         run: |
           ruff check .
@@ -44,6 +44,27 @@ jobs:
           node --check src/tirai/assets/resolve-target.js
       - name: Tests
         run: pytest -q
+
+  e2e:
+    name: End-to-end (agent-browser headless, GitHub Action)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Serve the smoke page
+        run: |
+          nohup python3 -m http.server 8765 --bind 127.0.0.1 --directory examples/ci/site >/dev/null 2>&1 &
+          sleep 1
+      - name: Record with the TIRAI action
+        uses: ./
+        with:
+          scenarios: examples/ci/smoke.yaml
+          out: evidence/ci
+          artifact-name: tirai-e2e-evidence
+      - name: Check the evidence
+        run: |
+          test -s evidence/ci/smoke/record/final.mp4
+          grep -q 'tests="2"' evidence/ci/junit.xml
+          grep -q 'failures="0"' evidence/ci/junit.xml
 
   install:
     name: Installer on ${{ matrix.os }}

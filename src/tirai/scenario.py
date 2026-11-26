@@ -50,7 +50,15 @@ SETTINGS = {
     "viewport", "auto_scroll", "strict_network", "ignore_requests", "trim_still",
     "single_tab", "pace", "action_delay", "typing_delay", "cursor_glide", "spotlight", "theme",
     "action_annotate", "action_zoom", "action_hold", "show_expects", "expect_pos", "summary_card",
+    "device", "locale", "timezone", "color_scheme",
 }  # fmt: skip
+# Shell commands per database: reset before a full recording, snapshot before each write step, restore on
+# `record --from-step` (the data as it was before the replaced steps wrote).
+DB_HOOKS = ("reset", "snapshot", "restore")
+# Browser emulation (agent-browser only); the runner reads the values back from the page before step 1.
+EMULATION = ("device", "locale", "timezone", "color_scheme")
+LOCALE_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
+TIMEZONE_RE = re.compile(r"^(UTC|[A-Za-z_]+(/[A-Za-z0-9_+-]+)+)$")
 PACE_MODES = {"fast", "human", "slow"}
 CAMERA_MODES = {"follow", "annotate", "action"}
 EXPECT_POS_MODES = {"top-right", "top-left", "bottom-right", "bottom-left"}
@@ -476,6 +484,15 @@ def _check_privacy(p, errors):
             errors.append(f"privacy.patterns: invalid pattern {pat!r}: {e}")
 
 
+def write_safety(sc):
+    """Write steps with nothing that makes running them again safe: no `cleanup:`, no database reset/snapshot hook
+    and no `{{run_id}}` in their data. Running such a step twice (dry-run --allow-writes, re-record) duplicates data."""
+    dbs = [d for d in (sc.get("databases") or {}).values() if isinstance(d, dict)]
+    if sc.get("cleanup") or any(d.get("reset") or d.get("snapshot") for d in dbs):
+        return []
+    return [st["id"] for st in sc.get("steps") or [] if step_writes(st) and "run_id" not in str(st)]
+
+
 def validate(sc) -> list[str]:
     """Return a list of human-readable problems; empty means the scenario is runnable."""
     errors = []
@@ -497,6 +514,18 @@ def validate(sc) -> list[str]:
         isinstance(vp, dict) and all(isinstance(vp.get(k), int) and vp[k] > 0 for k in ("width", "height"))
     ):
         errors.append("settings.viewport: needs integer width and height")
+    for key, ok, hint in (
+        ("device", lambda v: isinstance(v, str) and v.strip(), 'a device name, e.g. "iPhone 14" or "Pixel 7"'),
+        ("locale", lambda v: isinstance(v, str) and LOCALE_RE.match(v), "a BCP 47 tag, e.g. ja-JP or vi-VN"),
+        ("timezone", lambda v: isinstance(v, str) and TIMEZONE_RE.match(v), "an IANA name, e.g. Asia/Tokyo"),
+        ("color_scheme", lambda v: v in ("dark", "light"), "dark or light"),
+    ):
+        if settings.get(key) is not None and not ok(settings[key]):
+            errors.append(f"settings.{key}: must be {hint}")
+    if settings.get("device") is not None and vp is not None:
+        errors.append("settings.device: sets its own viewport; remove settings.viewport")
+    if settings.get("device") and any((t or {}).get("kind") == "dbx" for t in (sc.get("tabs") or {}).values()):
+        errors.append("settings.device: emulation applies to every tab, and a DBX grid is unreadable at phone size")
     if settings.get("ignore_requests") is not None and not isinstance(settings["ignore_requests"], list):
         errors.append("settings.ignore_requests: must be a list of URL substrings")
     if settings.get("single_tab") is not None and not isinstance(settings["single_tab"], bool):
@@ -569,6 +598,16 @@ def validate(sc) -> list[str]:
             kind = _single_key(a, f"tabs.{name}.setup[{i}]", ACTIONS, errors)
             if kind:
                 _check_args(kind, a[kind], f"tabs.{name}.setup[{i}]", errors)
+    for name, db in (sc.get("databases") or {}).items():
+        if not isinstance(db, dict):
+            continue
+        for key in DB_HOOKS:
+            if db.get(key) is not None and not (isinstance(db[key], str) and db[key].strip()):
+                errors.append(f"databases.{name}.{key}: must be a shell command")
+        if bool(db.get("snapshot")) != bool(db.get("restore")):
+            errors.append(f"databases.{name}: snapshot and restore go together")
+        if db.get("snapshot") and "{snapshot}" not in db["snapshot"] + db.get("restore", ""):
+            errors.append(f"databases.{name}.snapshot: use {{snapshot}} for the snapshot name")
     steps = sc.get("steps")
     if not isinstance(steps, list) or not steps:
         errors.append("steps: at least one step is required")
