@@ -391,7 +391,7 @@ def zoom_filter(step, seg_size, clip_start=0.0, clip_dur=None):
     )
 
 
-def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
+def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None, fade_out=True):
     W, H = frame
     th = resolve_theme(tl)
     top, bottom = th["header_height"], th["subtitle_height"]
@@ -413,11 +413,12 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
         for a, b, s in shown
     )
     eff_dur = max(0.2, dur - saved)
-    fade = (
-        f"fade=t=in:st=0:d=0.16:color={bg},fade=t=out:st={max(0.1, eff_dur - 0.16):.3f}:d=0.16:color={bg},"
-        if eff_dur >= 0.6
-        else ""
-    )
+    fade_parts = []
+    if eff_dur >= 0.6:
+        fade_parts.append(f"fade=t=in:st=0:d=0.16:color={bg}")
+        if fade_out:
+            fade_parts.append(f"fade=t=out:st={max(0.1, eff_dur - 0.16):.3f}:d=0.16:color={bg}")
+    fade = ",".join(fade_parts) + "," if fade_parts else ""
     cut = (
         f"fps={FPS},tpad=stop_mode=clone:stop_duration=10,"
         f"trim=start={start:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,"
@@ -781,7 +782,9 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
         t += title_seconds
         for i, step in enumerate(tl["steps"], 1):
             clip = tmpd / f"{i:02d}-{step['id']}.mp4"
-            dur = step_clip(tmp, rec_dir, tl, step, clip, lead, size, split_source(rec_dir, tl, i, step))
+            dur = step_clip(
+                tmp, rec_dir, tl, step, clip, lead, size, split_source(rec_dir, tl, i, step), fade_out=not bool(voice)
+            )
             if voice:
                 dur = fit_voice(tmpd, clip, dur, step, pick_voice(step, langs[0]), voice, langs[0])
             clips.append(clip)
