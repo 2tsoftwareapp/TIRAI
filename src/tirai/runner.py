@@ -16,7 +16,7 @@ from tirai import targets as tg
 from tirai.agentbrowser import make_driver
 from tirai.bsk import DriverError
 from tirai.desktop import MixedDriver, is_desktop
-from tirai.resources import annotate_js
+from tirai.resources import annotate_js, annotate_version
 from tirai.scenario import ScenarioError, interpolate, render, step_writes
 from tirai.system import primary_modifier
 
@@ -40,6 +40,7 @@ DBX_DEFAULTS = {
 
 
 DBX_NO_CONNECTION = "Select connection"
+ANN_MISSING = "__tirai_ann_missing__"  # returned by Runner.ann() probes when annotate.js must be (re)sent
 # Shrink the SQL editor pane so the Table Data grid gets most of the DBX view on video.
 DBX_COMPACT_JS = (
     "(()=>{const sp=document.querySelector('.sql-editor-workspace-split');if(!sp)return false;"
@@ -497,6 +498,15 @@ class Runner:
         """Evaluate a page script with `targets:` (re)tagged first."""
         return self.b.evaluate(self.tabs[tab], tg.with_tags(self.targets, expr))
 
+    def ann(self, tab, body, tagged=False):
+        """Run a JS function body that uses `__ann`; annotate.js (~30 KB) is sent only when the page lacks it."""
+        run = (lambda e: self.page(tab, e)) if tagged else (lambda e: self.b.evaluate(self.tabs[tab], e))
+        guard = f"if(!(window.__ann&&window.__ann.version==={js(annotate_version())}))return {js(ANN_MISSING)};"
+        res = run("(()=>{" + guard + body + "})()")
+        if res == ANN_MISSING:
+            res = run(annotate_js() + ";(()=>{" + body + "})()")
+        return res
+
     def retarget(self, tab, names):
         """Tag only the targets an action uses, polling with fast backoff; fail with what each locator matched."""
         if not names or is_desktop(self.tabs[tab]):
@@ -543,10 +553,7 @@ class Runner:
         cur_c = self.theme.get("cursor_color", "#111827")
         rpl_c = self.theme.get("ripple_color", "#2563eb")
         try:
-            dur = self.b.evaluate(
-                self.tabs[tab],
-                annotate_js() + f";__ann.cursorMove({cx:.1f},{cy:.1f},{glide_ms},{js(cur_c)})",
-            )
+            dur = self.ann(tab, f"return __ann.cursorMove({cx:.1f},{cy:.1f},{glide_ms},{js(cur_c)})")
             if isinstance(dur, (int, float)) and dur > 0:
                 time.sleep(min(0.8, (dur + 40) / 1000.0))
             if click_ripple:
@@ -670,7 +677,7 @@ class Runner:
         tgt = selector if isinstance(selector, str) else None
         calls.append(f"return __ann.actionCallout({js(tgt)},{js(label)},{js(opts)})")
         try:
-            return self.page(tab, annotate_js() + ";(()=>{" + ";".join(calls) + "})()")
+            return self.ann(tab, ";".join(calls), tagged=True)
         except DriverError:
             return None
 
@@ -1060,7 +1067,9 @@ class Runner:
         )
         return (
             annotate_js() + f";(()=>{{if(!{js(origins)}.includes(location.origin))return;"
-            f"const go=()=>{{try{{__ann.mask({js(cfg)})}}catch(e){{}}}};"
+            # Fail closed: if masking cannot start, cover the page; apply_privacy() reports it and fails the step.
+            f"const go=()=>{{try{{__ann.mask({js(cfg)})}}catch(e){{window.__tiraiMaskError=String(e&&e.message||e);"
+            "__ann.blur({x:0,y:0,w:innerWidth,h:innerHeight},{id:'mask-failsafe',padding:0,solid:true})}};"
             "if(document.documentElement)go();"
             "document.addEventListener('DOMContentLoaded',go,{once:true})})()"
         )
@@ -1070,7 +1079,14 @@ class Runner:
         cfg = self.privacy_config()
         if not cfg or self.sc["tabs"][tab].get("privacy") is False or is_desktop(self.tabs[tab]):
             return
-        self.page(tab, annotate_js() + f";__ann.mask({js(cfg)})")
+        res = self.ann(
+            tab,
+            "if(window.__tiraiMaskError)return {maskError:window.__tiraiMaskError};"
+            f"try{{return __ann.mask({js(cfg)})}}catch(e){{return {{maskError:String(e&&e.message||e)}}}}",
+            tagged=True,
+        )
+        if isinstance(res, dict) and res.get("maskError"):
+            raise ScenarioError(f"privacy: masking could not start: {res['maskError']}")
 
     def apply_single_tab(self, tab):
         """(Re)install the `single_tab` window.open override; page loads reset it, so re-apply often."""
@@ -1142,20 +1158,26 @@ class Runner:
         cfg = self._ann_theme_cfg()
         pass_c = self.theme.get("pass_color", "#16a34a")
         fail_c = self.theme.get("fail_color", "#dc2626")
-        calls = [f"__ann.config({js(cfg)})"] if cfg else []
+        calls = ["let w=null"] + ([f"__ann.config({js(cfg)})"] if cfg else [])
         sel = self._expect_selector(kind, arg)
         if sel and kind != "not_visible":
             box_c = pass_c if res.get("ok") else fail_c
-            calls.append(
-                f"try{{__ann.box({js(sel)},{{id:{js(f'__exp-{idx}')},color:{js(box_c)},width:3,padding:4,anim:'fade',duration:180}})}}catch(_){{}}"
-            )
+            opts = {"id": f"__exp-{idx}", "color": box_c, "width": 3, "padding": 4, "anim": "fade", "duration": 180}
+            box = f"__ann.box({js(sel)},{js(opts)})"
+            # The expectation already passed or failed on its own; a box that cannot be drawn is only a warning.
+            calls.append(f"try{{{box}}}catch(e){{w=String(e&&e.message||e)}}")
         hud_opts = {"pos": self.expect_pos, "passColor": pass_c, "failColor": fail_c}
         calls.append(f"__ann.expectHud({js(hud_rows)},{js(hud_opts)})")
         try:
-            self.page(tab, annotate_js() + ";(()=>{" + ";".join(calls) + ";return true})()")
+            missing = self.ann(tab, ";".join(calls) + ";return w", tagged=True)
             time.sleep(0.24)
         except DriverError:
-            pass
+            return
+        if isinstance(missing, str) and missing:
+            msg = f"expect box not drawn: {missing}"
+            if msg not in self.warnings:
+                self.warnings.append(msg)
+                print(f"     warning: {msg}")
 
     def annotate(self, tab, items, spotlight=False, keep_hud=False):
         if is_desktop(self.tabs[tab]):
@@ -1172,13 +1194,12 @@ class Runner:
             if kind == "text":
                 calls.append(f"__ann.text({js(target)},{js(a.pop('label'))},{js(a)})")
             elif kind == "badge":
-                calls.append(f"__ann.badge({js(target)},{js(a.pop('n'))},{js(a)})")
+                calls.append(f"__ann.badge({js(target)},{js(a.pop('n', 'auto'))},{js(a)})")
             else:
                 calls.append(f"__ann.{kind}({js(target)},{js(a)})")
         if items and spotlight:
             calls.append("__ann.spotlight()")
-        expr = annotate_js() + ";(()=>{" + ";".join(calls) + ";return __ann.list()})()"
-        return self.page(tab, expr) if items else self.b.evaluate(self.tabs[tab], expr)
+        return self.ann(tab, ";".join(calls) + ";return __ann.list()", tagged=bool(items))
 
     # ---------- main loop ----------
     def run(self):
@@ -1539,6 +1560,8 @@ def run(
         **({"downloads": r.downloads} if r.downloads else {}),
         **({"previews": r.previews} if r.previews else {}),
         **({"theme": r.theme} if r.theme else {}),
+        **({"meta": {str(k): str(v) for k, v in scenario["meta"].items()}} if scenario.get("meta") else {}),
+        **({"summary_card": False} if settings.get("summary_card") is False else {}),
         "hold": hold,
         **({"trim_still": True} if settings.get("trim_still") else {}),
     }

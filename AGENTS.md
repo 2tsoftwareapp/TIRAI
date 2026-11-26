@@ -23,7 +23,7 @@ TIRAI records test evidence videos from YAML scenarios. Using it in another proj
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev,postgres]'
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 .venv/bin/pytest
-node --check src/tirai/assets/annotate.js
+for f in src/tirai/assets/*.js; do node --check "$f"; done
 ```
 
 End-to-end (needs BrowserSkill extension connected and the demo stack): see `docs/getting-started.md`.

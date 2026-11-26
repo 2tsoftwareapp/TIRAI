@@ -40,12 +40,16 @@ PDF_KEYS = {"path", "pages", "contains", *PREVIEW_COMMON_KEYS}
 XLSX_KEYS = {"path", "sheets", "contains", "sheet", "max_rows", "max_cols", *PREVIEW_COMMON_KEYS}
 IMAGE_KEYS = {"path", "contains", *PREVIEW_COMMON_KEYS}
 PREVIEW_ANNOTATIONS = {"box", "arrow", "highlight", "circle", "badge"}
-ANNOTATIONS = {"box", "circle", "arrow", "text", "badge", "highlight", "blur"}
+ANNOTATIONS = {
+    "box", "circle", "underline", "strike", "arrow", "callout", "magnify", "text", "badge", "highlight", "blur",
+}  # fmt: skip
+ANNOTATION_STYLES = {"error", "warning", "info", "success"}
+BADGE_POS = {"top-left", "top-right", "bottom-left", "bottom-right", "left", "right"}
 SETTINGS = {
     "hold", "timing_scale", "expect_timeout", "camera", "camera_factor", "fast_forward",
     "viewport", "auto_scroll", "strict_network", "ignore_requests", "trim_still",
     "single_tab", "pace", "action_delay", "typing_delay", "cursor_glide", "spotlight", "theme",
-    "action_annotate", "action_zoom", "action_hold", "show_expects", "expect_pos",
+    "action_annotate", "action_zoom", "action_hold", "show_expects", "expect_pos", "summary_card",
 }  # fmt: skip
 PACE_MODES = {"fast", "human", "slow"}
 CAMERA_MODES = {"follow", "annotate", "action"}
@@ -80,6 +84,10 @@ VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 class ScenarioError(ValueError):
     pass
+
+
+def _is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def interpolate(value):
@@ -493,6 +501,15 @@ def validate(sc) -> list[str]:
         errors.append("settings.ignore_requests: must be a list of URL substrings")
     if settings.get("single_tab") is not None and not isinstance(settings["single_tab"], bool):
         errors.append("settings.single_tab: must be true or false")
+    if settings.get("summary_card") is not None and not isinstance(settings["summary_card"], bool):
+        errors.append("settings.summary_card: must be true or false")
+    meta = sc.get("meta")
+    if meta is not None:
+        if not isinstance(meta, dict) or not all(isinstance(v, (str, int, float)) for v in meta.values()):
+            errors.append("meta: must be a mapping of short text values (ticket, env, build, ...)")
+        elif any("${" in str(v) for v in meta.values()):
+            # meta is printed on the title card and written to the timeline: never route env values there.
+            errors.append("meta: ${ENV} is not expanded here; write the value itself (it is shown on video)")
     if settings.get("pace") is not None and settings["pace"] not in PACE_MODES:
         errors.append(f"settings.pace: must be one of {', '.join(sorted(PACE_MODES))}")
     if settings.get("camera") is not None and settings["camera"] not in CAMERA_MODES:
@@ -615,6 +632,21 @@ def validate(sc) -> list[str]:
             kind = _single_key(a, f"{where}.annotate[{j}]", ANNOTATIONS, errors)
             if kind and not (isinstance(a[kind], (str, dict)) and (isinstance(a[kind], str) or "target" in a[kind])):
                 errors.append(f"{where}.annotate[{j}]: {kind} needs a target")
+            elif kind and isinstance(a[kind], dict):
+                style = a[kind].get("style")
+                if style is not None and style not in ANNOTATION_STYLES:
+                    errors.append(f"{where}.annotate[{j}]: style must be one of {sorted(ANNOTATION_STYLES)}")
+                pos = a[kind].get("pos")
+                if kind == "badge" and pos is not None and pos not in BADGE_POS:
+                    errors.append(f"{where}.annotate[{j}]: badge pos must be one of {sorted(BADGE_POS)}")
+                if kind == "callout" and not a[kind].get("label"):
+                    errors.append(f"{where}.annotate[{j}]: callout needs a label")
+                factor = a[kind].get("factor")
+                if kind == "magnify" and factor is not None and not (_is_num(factor) and 1.2 <= factor <= 6):
+                    errors.append(f"{where}.annotate[{j}]: magnify factor must be a number from 1.2 to 6")
+                curve = a[kind].get("curve")
+                if kind == "arrow" and curve is not None and not (_is_num(curve) and -1 <= curve <= 1):
+                    errors.append(f"{where}.annotate[{j}]: arrow curve must be a number from -1 to 1")
     cleanup = sc.get("cleanup")
     if cleanup is not None:
         if not isinstance(cleanup, list) or not all(isinstance(c, dict) for c in cleanup):

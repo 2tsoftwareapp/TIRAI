@@ -8,6 +8,16 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 
 ### Added
 
+- Annotations: `underline` and `strike` shapes; `style: error | warning | info | success` presets; `badge` numbers
+  itself when `n` is omitted and takes `pos:`; overlapping labels in a step move apart; arrows stay inside the frame.
+- The video header bar shows step progress (`3/10`); long subtitles shrink to fit the subtitle band.
+- `callout` (speech bubble with a tail) and `magnify` (loupe with an enlarged snapshot, canvas pixels included,
+  masks kept covered) annotations; `arrow` takes `curve:`.
+- Summary card after the last step of `final.mp4` (overall PASS/FAIL, one row per step; `settings.summary_card: false`
+  turns it off). Every video gets about 4 s longer by default.
+- `meta:` (ticket, env, build, ...) is printed on the title card and in `report.md`.
+- Header, subtitle, title-card and badge sizes grow with the recording height (1080p, HiDPI) unless set in `theme:`.
+- Headless-Chrome behaviour tests for `annotate.js`.
 - `download:` action (agent-browser): clicks an element, waits for the file and keeps it in `<out>/downloads/`;
   `expect: pdf` / `expect: xlsx` verify page count, page text and sheets of the downloaded file
   (`pip install tirai[pdf]` for PDF rendering; `append: true` on a PDF download adds its pages to `final.mp4`).
@@ -51,6 +61,13 @@ All notable changes to TIRAI, the scenario-driven test evidence recorder (CLI + 
 
 ### Fixed
 
+- Privacy masks follow their text every frame, rescan on text edits (characterData changes were ignored), and cover
+  open shadow roots and same-origin iframes. A mask that cannot start at page load covers the page (fail closed).
+- Annotations re-resolve targets that a framework re-rendered and hide while the target is gone, instead of
+  jumping to the top-left corner; spotlight holes follow scroll and re-layout.
+- `spotlight` now dims around action callouts (the option was passed but ignored).
+- An expectation box that cannot be drawn is reported as a run warning instead of being dropped silently.
+- `annotate.js` is sent once per page load instead of on every overlay call; a newer version shuts the old one down.
 - YAML syntax errors name the file, line and offending text, with a hint to quote `${...}` values.
 - `save.pattern` is a JavaScript RegExp like `text_matches` (was Python `re`); JS-only forms such as `[^]` and
   named groups validate; an invalid pattern is a step error instead of a crash.

@@ -1,6 +1,8 @@
 """Locate files bundled with the package (annotation script, agent skill)."""
 
+import functools
 import os
+import re
 import shutil
 import sys
 from importlib.resources import files
@@ -29,6 +31,15 @@ def annotate_js_path() -> Path:
 
 def annotate_js() -> str:
     return annotate_js_path().read_text(encoding="utf-8")
+
+
+@functools.cache
+def annotate_version() -> str:
+    """The `VERSION` constant of the bundled annotate.js (what `window.__ann.version` reports once injected)."""
+    m = re.search(r"const VERSION = '([^']+)'", annotate_js())
+    if not m:
+        raise RuntimeError("annotate.js has no VERSION constant")
+    return m.group(1)
 
 
 def asset_text(name) -> str:
