@@ -273,16 +273,19 @@ steps:
 
 | Option | Where | Effect |
 |---|---|---|
-| Chapters | automatic | `final.mp4` has one chapter per step (title card included) |
+| Chapters | automatic | `final.mp4` has one chapter per step (title card and summary card included) |
+| Header bar | automatic | tab label, step progress (`3/10`), step id and title, PASS/FAIL badge; long subtitles shrink to fit their band |
+| Summary card | automatic (`settings.summary_card: false` turns it off) | 4 s card after the last step (before any PDF/Excel/image preview pages): overall PASS/FAIL and one ✓/✗ row per step (failures first when the list does not fit) |
+| `meta:` | top-level | `meta: { ticket: "#1234", env: staging, build: 387d777 }` is printed on the title card and in `report.md`; values are literal text (no `${ENV}`), so never put secrets there |
 | `zoom: "#email"` | step | eases in (≈0.6 s) on the element and holds; add `out: true` in `{ target, factor, at, out }` to ease back out |
 | `zoom: annotate` / `camera: annotate` | step / `settings:` | automatically zooms in on the `annotate:` union box + labels, holds, and eases back out smoothly |
 | `zoom: action` / `camera: action` | step / `settings:` | zooms in and pans across every interactive action target, then eases smoothly back out to full view when `expect:` / results appear (falls back to `annotate:` zoom on steps without UI actions) |
 | `action_annotate: true` | step / `settings:` | draws a live callout pill + highlight box on every interactive action (`click`, `fill`, `clear`, `select`, `press`, `download`, `upload`, `hover`); customize per action with `label:`, `annotate: false`, `zoom: 1.8`, `color:` |
 | `action_zoom: true` / `1.65` | `settings:` | enables action-by-action zoom (optionally setting the zoom factor); `action_hold` (default `0.35` s) sets the brief callout dwell |
 | `show_expects: true` | step / `settings:` | renders a live **EXPECTATIONS** checklist HUD card (`✓` PASS / `✗` FAIL + actual value on failure) ticking off each `expect:` one by one and boxing checked DOM targets; position with `expect_pos: top-right \| top-left \| bottom-right \| bottom-left` |
-| `spotlight: true` | step / `settings:` | dims the page around active `annotate:` targets (and on annotated PDF/Excel/image previews) |
+| `spotlight: true` | step / `settings:` | dims the page around active `annotate:` targets, around each action callout when `action_annotate` is on, and on annotated PDF/Excel/image previews |
 | `pace: human` (`slow`) | `settings:` | when recording, glides a 60fps virtual cursor with click ripples, types ASCII fields progressively, and adds brief natural pauses (dry-run stays full speed) |
-| `theme:` | top-level / `settings:` | customize `font`, `header_size`, `subtitle_size`, `subtitle_height`, `subtitle_bg`, `subtitle_color`, `tab_colors`, `pass_color`, `fail_color`, `accent`, `cursor_color`, `ripple_color`, `spotlight_opacity` |
+| `theme:` | top-level / `settings:` | customize `font`, `header_size`, `subtitle_size`, `subtitle_height`, `subtitle_bg`, `subtitle_color`, `tab_colors`, `pass_color`, `fail_color`, `accent`, `cursor_color`, `ripple_color`, `spotlight_opacity`; header/subtitle sizes you do not set grow with the recording height (defaults are tuned for 720p, ×1.5 at 1080p) |
 | `--lang vi` | `tirai record` / `compose` | burns that subtitle language; every language is also written as `subtitles.<lang>.srt` |
 | `zoom: follow` | step | zooms in and pans from one action target (click, fill, select…) to the next |
 | `camera: follow` | `settings:` | `zoom: follow` for every step without its own `zoom:`; `camera_factor` (default 1.6) sets the zoom |

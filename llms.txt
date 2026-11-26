@@ -43,7 +43,7 @@ Key facts for agents:
 
 - [Getting started](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/getting-started.md): install, demo stack (web app + PostgreSQL + DBX), first recording
 - [Scenario format](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/scenario-format.md): tabs, databases, step fields, actions, expectations, recording model
-- [Annotations](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/annotations.md): box, circle, arrow, text, badge, highlight, blur; targets; animation modes
+- [Annotations](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/annotations.md): box, circle, underline, strike, arrow, callout, magnify, text, badge, highlight, blur; styles; targets; animation; privacy masking
 - [Configuration](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/configuration.md): environment variables, `.env`, scenario settings, DBX selector overrides
 - [Agents](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/agents.md): skill install locations per agent
 - [Troubleshooting](https://raw.githubusercontent.com/2tsoftwareapp/TIRAI/main/docs/troubleshooting.md): common errors and fixes

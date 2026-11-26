@@ -6,10 +6,12 @@ Writes final.mp4, subtitles.srt, report.md/.html/.xlsx, timeline.final.json and 
 """
 
 import json
+import math
 import os
 import re
 import shutil
 import tempfile
+import unicodedata
 from pathlib import Path
 
 from tirai import export, report
@@ -33,6 +35,34 @@ THEME_DEFAULTS = {
     "accent": "#2563eb",
     "spotlight_opacity": 0.30,
 }
+
+
+SCALED_THEME_KEYS = ("header_size", "header_height", "subtitle_size", "subtitle_height")
+REFERENCE_HEIGHT = 720  # THEME_DEFAULTS sizes are tuned for a 720 px tall recording
+
+
+def scale_theme(tl: dict, frame) -> None:
+    """Grow the default header/subtitle sizes with the recording height (1080p, HiDPI) so text keeps its
+    on-screen proportion; sizes the scenario set explicitly are kept as they are."""
+    s = min(3.0, max(1.0, frame[1] / REFERENCE_HEIGHT))
+    th = dict(tl.get("theme") or {})
+    for key in SCALED_THEME_KEYS:
+        th.setdefault(key, round(THEME_DEFAULTS[key] * s))
+    th["chrome_scale"] = s
+    tl["theme"] = th
+
+
+def status_badge(th, top, textfile, ok):
+    """PASS/FAIL pill at the right end of the header bar (drawtext: ASCII only); 80x28 at 720p."""
+    s = float(th.get("chrome_scale", 1))
+    w, h, fs, gap = round(80 * s), round(28 * s), round(18 * s), round(16 * s)
+    y = max(2, (top - h) // 2)
+    color = _hex_to_ff(th["pass_color"] if ok else th["fail_color"])
+    return (
+        f"drawbox=x=iw-{w + gap}:y={y}:w={w}:h={h}:color={color}:t=fill,"
+        f"drawtext=fontfile=font-bold.ttf:textfile={textfile}:fontsize={fs}:fontcolor=white:"
+        f"x=w-{gap + w // 2}-text_w/2:y={y + (h - fs) // 2}"
+    )
 
 
 def resolve_theme(tl: dict | None = None) -> dict:
@@ -117,6 +147,37 @@ def ass_escape(text):
     return str(text).replace("\r", " ").replace("\n", "\\N")
 
 
+def text_em(text):
+    """Rough rendered width in em: wide CJK glyphs ~1 em, everything else ~0.55 em."""
+    return sum(1.0 if unicodedata.east_asian_width(c) in "WF" else 0.55 for c in str(text))
+
+
+def clip_em(text, max_em):
+    """`text` cut (with an ellipsis) so its estimated width stays within `max_em`."""
+    if text_em(text) <= max_em:
+        return text
+    out, used = [], 1.0  # room for the ellipsis
+    for c in text:
+        used += text_em(c)
+        if used > max_em:
+            break
+        out.append(c)
+    return "".join(out) + "…"
+
+
+def fit_subtitle_size(text, frame_w, size, band, min_size=14):
+    """Largest font size (px) <= `size` at which `text`, wrapped to the frame width, fits the subtitle band.
+
+    Width comes from `text_em`; lines take ~1.25 em; explicit line breaks start a new line.
+    """
+    widths = [text_em(part) for part in str(text).split("\n")]
+    usable = max(1, frame_w - 48)
+    for fs in range(int(size), min_size - 1, -1):
+        if sum(max(1, math.ceil(em * fs / usable)) for em in widths) * fs * 1.25 <= band - 8:
+            return fs
+    return min_size
+
+
 def _ass_style(name, font, size, bold, outline, align, ml, mr, mv, color="&H00FFFFFF"):
     return (
         f"Style: {name},{font},{size},{color},&H000000FF,&H00000000,&H80000000,{bold},0,0,0,100,100,0,0,1,"
@@ -147,6 +208,55 @@ def _ass_doc(play_x, styles, events):
     return "\n".join(lines) + "\n"
 
 
+SUMMARY_ROW_PX = 20  # step row font size on the closing summary card (720p)
+
+
+def summary_rows(steps, max_rows):
+    """Rows for the summary card: every step when they fit, else failures first and room for a '+N more' line."""
+    if len(steps) <= max_rows:
+        return list(steps), 0
+    bad = [s for s in steps if s["status"] != "passed"]
+    good = [s for s in steps if s["status"] == "passed"]
+    shown = (bad + good)[: max(1, max_rows - 1)]
+    return shown, len(steps) - len(shown)
+
+
+def summary_events(tl, th, frame, k, title_line):
+    """Card after the last step: overall result and one ✓/✗ row per step (two columns when the list is long)."""
+    W, fh = frame
+    cs = float(th.get("chrome_scale", 1))
+    a, b = ass_ts(tl["summary"]["start"]), ass_ts(tl["summary"]["end"])
+    steps = tl["steps"]
+    passed = sum(s["status"] == "passed" for s in steps)
+    ok = passed == len(steps)
+    verdict = _hex_to_ass(th["pass_color"] if ok else th["fail_color"])
+    head = f"{{\\c{verdict}&}}{'PASS' if ok else 'FAIL'}{{\\r}}   {tl['scenario']}"
+    events = [
+        title_line(head, "T1", -fh / 2 / cs + 70, a, b),
+        title_line(f"{passed}/{len(steps)} steps passed", "T2", -fh / 2 / cs + 120, a, b),
+    ]
+    row_h = SUMMARY_ROW_PX * 1.6 * cs
+    top = 165 * cs
+    per_col = max(1, int((fh - top - 30 * cs) // row_h))
+    cols = 1 if len(steps) <= per_col else 2
+    rows, more = summary_rows(steps, per_col * cols)
+    col_w = (W - 96 * cs) / cols
+    max_em = max(6.0, col_w / (SUMMARY_ROW_PX * cs) - 3)  # minus the mark and gap
+    for i, s in enumerate(rows):
+        col, row = divmod(i, per_col)
+        x = round((48 * cs + col * col_w) * k)
+        y = round((top + row * row_h) * k)
+        mark_c = _hex_to_ass(th["pass_color"] if s["status"] == "passed" else th["fail_color"])
+        mark = "✓" if s["status"] == "passed" else "✗"
+        text = clip_em(f"{s['id']}  {s.get('title', '')}", max_em)
+        events.append((a, b, "Row", ass_escape(f"{{\\pos({x},{y})\\c{mark_c}&}}{mark}{{\\r}}  {text}")))
+    if more:
+        col, row = divmod(len(rows), per_col)
+        x, y = round((48 * cs + col * col_w) * k), round((top + row * row_h) * k)
+        events.append((a, b, "Row", f"{{\\pos({x},{y})}}… +{more} more"))
+    return events
+
+
 def build_ass(tl, size, title_seconds):
     """One ASS file for the title card, header bar and subtitles; libass font fallback covers CJK."""
     W, H = size
@@ -158,11 +268,11 @@ def build_ass(tl, size, title_seconds):
     font = th.get("font") or subtitle_font_name()
     sub_color = _hex_to_ass(th["subtitle_color"])
     sub_fs = max(1, round(th["subtitle_size"] * k))
-    sub_small_fs = max(1, round(max(16, th["subtitle_size"] - 5) * k))
     sub_mv = max(2, round(max(8, (bottom - th["subtitle_size"] * 2.3) / 2) * k))
     hdr_fs = max(1, round(th["header_size"] * k))
     hdr_mv = max(1, round(max(4, (top - th["header_size"]) / 2) * k))
     passed = sum(s["status"] == "passed" for s in tl["steps"])
+    cs = float(th.get("chrome_scale", 1))
     styles = [
         _ass_style("Sub", font, sub_fs, 0, 0.5, 2, max(6, round(24 * k)), max(6, round(24 * k)), sub_mv, sub_color),
         _ass_style(
@@ -173,21 +283,22 @@ def build_ass(tl, size, title_seconds):
             0,
             7,
             max(2, round(16 * k)),
-            max(10, round(110 * k)),
+            max(10, round(110 * float(th.get("chrome_scale", 1)) * k)),
             hdr_mv,
         ),
-        _ass_style("T1", font, max(1, round(44 * k)), -1, 0, 5, 0, 0, 0, sub_color),
-        _ass_style("T2", font, max(1, round(24 * k)), 0, 0, 5, 0, 0, 0, sub_color),
-        _ass_style("T3", font, max(1, round(20 * k)), 0, 0, 5, 0, 0, 0, sub_color),
-        _ass_style("Pdf", font, max(1, round(22 * k)), -1, 0, 7, max(2, round(20 * k)), 10, max(1, round(8 * k))),
+        _ass_style("T1", font, max(1, round(44 * cs * k)), -1, 0, 5, 0, 0, 0, sub_color),
+        _ass_style("T2", font, max(1, round(24 * cs * k)), 0, 0, 5, 0, 0, 0, sub_color),
+        _ass_style("T3", font, max(1, round(20 * cs * k)), 0, 0, 5, 0, 0, 0, sub_color),
+        _ass_style("Pdf", font, max(1, round(22 * cs * k)), -1, 0, 7, max(2, round(20 * k)), 10, max(1, round(8 * k))),
+        _ass_style("Row", font, max(1, round(SUMMARY_ROW_PX * cs * k)), 0, 0, 4, 0, 0, 0, sub_color),
     ]
     cx = round(play_x / 2)
     end_title = ass_ts(title_seconds)
 
-    def title_line(text, style, dy):
+    def title_line(text, style, dy, a=None, b=end_title):
         # drawtext centred with y=(h-text_h)/2+dy; \an5 + \pos does the same in script units.
-        y = round((fh / 2 + dy) * k)
-        return (ass_ts(0), end_title, style, ass_escape(f"{{\\pos({cx},{y})}}{text}"))
+        y = round((fh / 2 + dy * cs) * k)
+        return (a or ass_ts(0), b, style, ass_escape(f"{{\\pos({cx},{y})}}{text}"))
 
     events = [
         title_line(tl["scenario"], "T1", -60),
@@ -196,16 +307,24 @@ def build_ass(tl, size, title_seconds):
             f"Evidence: {DRIVER_NAMES.get(tl.get('driver'), 'browser')} recording + TIRAI annotations", "T3", 60
         ),
     ]
-    for s in tl["steps"]:
+    if tl.get("meta"):
+        events.append(title_line("  ·  ".join(f"{key}: {val}" for key, val in tl["meta"].items()), "T3", 100))
+    if tl.get("summary"):
+        events += summary_events(tl, th, (W, fh), k, title_line)
+    total = len(tl["steps"])
+    for n, s in enumerate(tl["steps"], 1):
         a, b = ass_ts(s["final_start"]), ass_ts(s["final_end"])
         label = tl["tabs"].get(s["tab"], {}).get("label", s["tab"])
-        events.append((a, b, "Hdr", ass_escape(f"{label}   |   {s['id']}  {s.get('title', '')}")))
+        events.append((a, b, "Hdr", ass_escape(f"{label}   |   {n}/{total}   {s['id']}  {s.get('title', '')}")))
         sub_a = ass_ts(s["final_start"] + 0.2)
         sub_b = ass_ts(max(s["final_start"] + 0.3, s["final_end"] - 0.1))
         raw_sub = str(s.get("subtitle") or s.get("title", ""))
         sub_txt = ass_escape(raw_sub)
-        if len(raw_sub) > 105:
-            sub_txt = f"{{\\fs{sub_small_fs}}}{sub_txt}"
+        start_px = max(16, th["subtitle_size"] - 5) if len(raw_sub) > 105 else th["subtitle_size"]
+        fit_px = fit_subtitle_size(raw_sub, W, start_px, bottom)
+        if fit_px < th["subtitle_size"]:
+            # Shrink instead of letting a third line spill out of the band onto the video.
+            sub_txt = f"{{\\fs{max(1, round(fit_px * k))}}}{sub_txt}"
         events.append((sub_a, sub_b, "Sub", sub_txt))
     return _ass_doc(play_x, styles, events)
 
@@ -404,12 +523,13 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
     color = tab_colors[list(tl["tabs"]).index(step["tab"]) % len(tab_colors)]
     status = "PASS" if step["status"] == "passed" else "FAIL"
     st = text_file(tmp, f"st-{step['id']}.txt", status)
-    st_color = _hex_to_ff(th["pass_color"] if status == "PASS" else th["fail_color"])
     bold = "font-bold.ttf"
     ff_filter, saved, shown = warp(step.get("idle"), start)
+    cs = float(th.get("chrome_scale", 1))
     badges = "".join(
-        f"drawtext=fontfile={bold}:text='{s:g}x':fontsize=22:fontcolor=white:box=1:boxcolor={bg}cc:boxborderw=8:"
-        f"x=w-text_w-24:y=24:enable='between(t,{a:.2f},{b:.2f})',"
+        f"drawtext=fontfile={bold}:text='{s:g}x':fontsize={round(22 * cs)}:fontcolor=white:box=1:boxcolor={bg}cc:"
+        f"boxborderw={round(8 * cs)}:x=w-text_w-{round(24 * cs)}:y={round(24 * cs)}:"
+        f"enable='between(t,{a:.2f},{b:.2f})',"
         for a, b, s in shown
     )
     eff_dur = max(0.2, dur - saved)
@@ -425,11 +545,8 @@ def step_clip(tmp, rec_dir, tl, step, out, lead, frame, split_image=None):
     )
     dur -= saved
     # The header text is burned by the subtitles pass (ASS); the clip only draws the bar and badge.
-    badge_y = max(2, (top - 28) // 2)
-    chrome = (
-        f"pad={W}:{H + top}:0:{top}:color={color},pad={W}:{FH}:0:0:color={bg},"
-        f"drawbox=x=iw-96:y={badge_y}:w=80:h=28:color={st_color}:t=fill,"
-        f"drawtext=fontfile={bold}:textfile={st}:fontsize=18:fontcolor=white:x=w-56-text_w/2:y={badge_y + 5}"
+    chrome = f"pad={W}:{H + top}:0:{top}:color={color},pad={W}:{FH}:0:0:color={bg}," + status_badge(
+        th, top, st, status == "PASS"
     )
 
     def fit(w, h):
@@ -613,13 +730,7 @@ def append_pdf_pages(tmpd, final, tl, rec_dir, size):
         if "ok" in item:
             status = "PASS" if item["ok"] else "FAIL"
             st = text_file(tmpd, f"pv-st-{idx}.txt", status)
-            st_color = _hex_to_ff(th["pass_color"] if item["ok"] else th["fail_color"])
-            badge_y = max(2, (top - 28) // 2)
-            badge_chrome = (
-                f",drawbox=x=iw-96:y={badge_y}:w=80:h=28:color={st_color}:t=fill,"
-                f"drawtext=fontfile=font-bold.ttf:textfile={st}:fontsize=18:fontcolor=white:"
-                f"x=w-56-text_w/2:y={badge_y + 5}"
-            )
+            badge_chrome = "," + status_badge(th, top, st, item["ok"])
 
         for pinfo in pages:
             i, total = pinfo["page"], pinfo["total"]
@@ -707,6 +818,9 @@ def chapters_file(tmp, tl, title_seconds):
     for s in tl["steps"]:
         lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(s['final_start'] * 1000)}"]
         lines += [f"END={int(s['final_end'] * 1000)}", f"title={s['id']} {s['title']} ({s['status'].upper()})", ""]
+    if tl.get("summary"):
+        lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(tl['summary']['start'] * 1000)}"]
+        lines += [f"END={int(tl['summary']['end'] * 1000)}", "title=Summary", ""]
     return text_file(tmp, "chapters.txt", "\n".join(lines))
 
 
@@ -746,7 +860,9 @@ def pick_voice(step, lang):
     return str(v.get(lang) or next(iter(v.values()), pick_subtitle(step, lang)))
 
 
-def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voice=None, trim_still=False):
+def compose(
+    timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voice=None, trim_still=False, summary_seconds=4.0
+):
     """Build final.mp4 (+ subtitles.srt, report.md/html/xlsx, timeline.final.json, manifest.sha256)."""
     if not ffmpeg_bin():
         raise RuntimeError("ffmpeg not found; run `tirai setup` or set FFMPEG_BIN")
@@ -773,6 +889,7 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
         shutil.copyfile(fonts[0], tmpd / "font.ttf")
         shutil.copyfile(fonts[1], tmpd / "font-bold.ttf")
         size = frame_size(tl, rec_dir)
+        scale_theme(tl, size)
         langs = subtitle_languages(tl, lang) or [None]
         clips, srt, t = [], {x: [] for x in langs}, 0.0
         title = tmpd / "00-title.mp4"
@@ -792,6 +909,12 @@ def compose(timeline_path, out=None, lead=0.3, title_seconds=3.0, lang=None, voi
             step["subtitle"] = pick_subtitle(step, langs[0])
             step["final_start"], step["final_end"] = round(t, 3), round(t + dur, 3)
             t += dur
+        if tl.get("summary_card", True) and summary_seconds > 0:
+            card = tmpd / "zz-summary.mp4"
+            title_card(tmp, card, summary_seconds, size, tl=tl)
+            clips.append(card)
+            tl["summary"] = {"start": round(t, 3), "end": round(t + summary_seconds, 3)}
+            t += summary_seconds
         (tmpd / "list.txt").write_text("".join(f"file '{c.name}'\n" for c in clips))
         ff("-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "joined.mp4", cwd=tmp)
         srt_text = "\n".join(srt[langs[0]])
@@ -848,6 +971,7 @@ def report_md(tl, video_name):
         f"# {tl['scenario']}",
         "",
         f"Recorded: {tl['created']}  ",
+        *[f"{key}: {val}  " for key, val in (tl.get("meta") or {}).items()],
         f"Video: `{video_name}`",
         "",
         "| Step | Tab | Title | Status | Video time | Checks |",
